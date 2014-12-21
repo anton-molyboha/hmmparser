@@ -182,7 +182,7 @@ private:
 	EmptyChunkState(const ChunkT& chunk)
 	: chunk(chunk)
 	{}
-	
+
 public:
 	static Ptr create(const ChunkT& chunk)
 	{
@@ -268,7 +268,7 @@ public:
 	{
 		return Ptr(new GarbageChunkState(probability_finish));
 	}
-	
+
 	virtual double getProbability(CharT c) const
 	{
 		return (1 - probability_finish) / 256;
@@ -295,6 +295,206 @@ public:
 ChunkState<Void>::Ptr garbage(double probability_finish)
 {
 	return GarbageChunkState::create(probability_finish);
+}
+
+bool is_whitespace(char c)
+{
+	return (c == ' ') || (c == '\t');
+}
+
+int num_whitespace()
+{
+	return 2;
+}
+
+class WhitespaceChunkState: public ChunkState<Void>
+{
+public:
+	typedef std::shared_ptr<WhitespaceChunkState> Ptr;
+
+private:
+	double probability_finish;
+
+	WhitespaceChunkState(double probability_finish)
+	: probability_finish(probability_finish)
+	{}
+
+public:
+	static Ptr create(double probability_finish)
+	{
+		return Ptr(new WhitespaceChunkState(probability_finish));
+	}
+
+	virtual double getProbability(CharT c) const
+	{
+		if( is_whitespace(c) )
+		{
+			return (1 - probability_finish) / num_whitespace();
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	virtual double getProbabilityFinished() const
+	{
+		return probability_finish;
+	}
+
+	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	{
+		std::list<TransitionT> res;
+		if( is_whitespace(c) )
+		{
+			res.push_back(TransitionT(WhitespaceChunkState::create(probability_finish), 1));
+		}
+		return res;
+	}
+
+	virtual ChunkT finish() const
+	{
+		return Void();
+	}
+};
+
+class WhitespaceChunkFirstState: public ChunkState<Void>
+{
+public:
+	typedef std::shared_ptr<WhitespaceChunkFirstState> Ptr;
+
+private:
+	double probability_finish;
+
+	WhitespaceChunkFirstState(double probability_finish)
+	: probability_finish(probability_finish)
+	{}
+
+public:
+	static Ptr create(double probability_finish)
+	{
+		return Ptr(new WhitespaceChunkFirstState(probability_finish));
+	}
+
+	virtual double getProbability(CharT c) const
+	{
+		if( is_whitespace(c) )
+		{
+			return 1.0 / num_whitespace();
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	virtual double getProbabilityFinished() const
+	{
+		return 0;
+	}
+
+	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	{
+		std::list<TransitionT> res;
+		res.push_back(TransitionT(WhitespaceChunkState::create(probability_finish), 1));
+		return res;
+	}
+
+	virtual ChunkT finish() const
+	{
+		return Void();
+	}
+};
+
+ChunkState<Void>::Ptr whitespace(double probability_finish)
+{
+	return WhitespaceChunkFirstState::create(probability_finish);
+}
+
+ChunkState<Void>::Ptr whitespace()
+{
+	return whitespace(0.1);
+}
+
+class LiteralChunkState: public ChunkState<std::string>
+{
+public:
+	typedef std::shared_ptr<LiteralChunkState> Ptr;
+
+private:
+	std::string literal;
+	int pos;
+
+	LiteralChunkState(std::string literal, int pos)
+	: literal(literal), pos(pos)
+	{
+		if( (pos < 0) || (pos >= literal.length()) )
+		{
+			throw std::range_error("pos out of range in LiteralChunkState constructor");
+		}
+	}
+
+public:
+	static Ptr create(std::string literal, int pos)
+	{
+		return Ptr(new LiteralChunkState(literal, pos));
+	}
+
+	static Ptr create(std::string literal)
+	{
+		return create(literal, 0);
+	}
+
+	virtual double getProbability(CharT c) const
+	{
+		if( c == literal[pos] )
+		{
+			return 1;
+		}
+		else
+		{
+			return 0;
+		}
+	}
+
+	virtual double getProbabilityFinished() const
+	{
+		return 0;
+	}
+
+	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	{
+		std::list<TransitionT> res;
+		if( c == literal[pos] )
+		{
+			if( pos + 1 < literal.length() )
+			{
+				res.push_back(TransitionT(create(literal, pos + 1), 1));
+			}
+			else
+			{
+				res.push_back(TransitionT(EmptyChunkState<std::string>::create(literal), 1));
+			}
+		}
+		return res;
+	}
+
+	virtual ChunkT finish() const
+	{
+		throw std::logic_error("Call of ChunkState::finish() when getProbabilityFinished() == 0");
+	}
+};
+
+ChunkState<std::string>::Ptr literal(std::string value)
+{
+	if( value.length() > 0 )
+	{
+		return LiteralChunkState::create(value);
+	}
+	else
+	{
+		return EmptyChunkState<std::string>::create(value);
+	}
 }
 
 //////
@@ -1440,7 +1640,15 @@ int main(int argc, char* argv[])
 	//std::shared_ptr<ChunkState<int>> start_state = transform<int>(SingleCharChunkState::create(), char_to_int);
 	//auto start_state = garbage(0.99);
 	//auto start_state = sequence(Nil().then(SingleCharChunkState::create()).then(SingleCharChunkState::create()).then(SingleCharChunkState::create()));
-	auto start_state = sequence(Nil().then(garbage(0.01)).then(a_floating_point_number(true)).then(garbage(0.01)));
+	auto start_state = sequence(Nil().
+		then(garbage(0.01)).
+		then(literal("Hello")).
+		then(whitespace()).
+		then(literal("world")).
+		then(whitespace()).
+		then(a_floating_point_number(true)).
+		then(garbage(0.01))
+	);
 	//auto start_state = sequence(Nil().then(garbage(0.99)).then(an_integer()).then(garbage(0.99)));
 	//auto start_state = a_positive_integer();
 	auto chunk = parse(std::cin, start_state);
