@@ -248,132 +248,53 @@ public:
 	}
 };
 
-class APositiveIntegerFirstChunkState;
+class Void
+{};
 
-class APositiveIntegerChunkState: public ChunkState<int>
+class GarbageChunkState: public ChunkState<Void>
 {
 public:
-	typedef std::shared_ptr<APositiveIntegerChunkState> Ptr;
-	typedef ChunkState<int>::CharT CharT;
-	typedef ChunkState<int>::ChunkT ChunkT;
-	typedef Transition<ChunkT> TransitionT;
+	typedef std::shared_ptr<GarbageChunkState> Ptr;
 
 private:
-	double prob_finished;
-	int prefix;
+	double probability_finish;
 
-	APositiveIntegerChunkState(double prob_finished, int prefix)
-	: prob_finished(prob_finished), prefix(prefix)
+	GarbageChunkState(double probability_finish)
+	: probability_finish(probability_finish)
 	{}
 
-	static Ptr create(double prob_finished, int prefix)
-	{
-		return Ptr(new APositiveIntegerChunkState(prob_finished, prefix));
-	}
-
-	static Ptr create(double prob_finished)
-	{
-		return create(prob_finished, 0);
-	}
-
-	friend APositiveIntegerFirstChunkState;
 public:
+	static Ptr create(double probability_finish)
+	{
+		return Ptr(new GarbageChunkState(probability_finish));
+	}
+	
 	virtual double getProbability(CharT c) const
 	{
-		if( (c >= '0') && (c <= '9') )
-		{
-			return (1 - prob_finished) / 10;
-		}
-		else
-		{
-			return 0;
-		}
+		return (1 - probability_finish) / 256;
 	}
 
 	virtual double getProbabilityFinished() const
 	{
-		return prob_finished;
-	}
-
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
-	{
-		if( (c >= '0') && (c <= '9') )
-		{
-			std::list<TransitionT> res;
-			res.push_back(TransitionT(create(prob_finished, prefix * 10 + (c - '0')), 1));
-			return res;
-		}
-		else
-		{
-			//throw std::logic_error(std::string("A call to APositiveInteger::getTransitions(") + c + ")");
-			return std::list<TransitionT>();
-		}
-	}
-
-	virtual int finish() const
-	{
-		return prefix;
-	}
-};
-
-class APositiveIntegerFirstChunkState: public ChunkState<int>
-{
-private:
-	double probability_finished;
-
-	APositiveIntegerFirstChunkState(double prob_finished)
-	: probability_finished(prob_finished)
-	{}
-
-public:
-	typedef std::shared_ptr<APositiveIntegerFirstChunkState> Ptr;
-
-	static Ptr create(double prob_finished)
-	{
-		return Ptr(new APositiveIntegerFirstChunkState(prob_finished));
-	}
-
-	static Ptr create()
-	{
-		return create(0.25);
-	}
-
-	virtual double getProbability(CharT c) const
-	{
-		if( (c >= '0') && (c <= '9') )
-		{
-			return 0.1;
-		}
-		else
-		{
-			return 0.0;
-		}
-	}
-
-	virtual double getProbabilityFinished() const
-	{
-		return 0;
+		return probability_finish;
 	}
 
 	virtual const std::list<TransitionT> getTransitions(CharT c) const
 	{
 		std::list<TransitionT> res;
-		if( (c >= '0') && (c <= '9') )
-		{
-			res.push_back(TransitionT(APositiveIntegerChunkState::create(probability_finished, c - '0'), 1));
-		}
+		res.push_back(TransitionT(create(probability_finish), 1));
 		return res;
 	}
 
-	virtual int finish() const
+	virtual ChunkT finish() const
 	{
-		throw std::logic_error("APositiveIntegerFirstChunkState has zero probabilityFinished but finish() has been called");
+		return Void();
 	}
 };
 
-ChunkState<int>::Ptr a_positive_integer()
+ChunkState<Void>::Ptr garbage(double probability_finish)
 {
-	return APositiveIntegerFirstChunkState::create();
+	return GarbageChunkState::create(probability_finish);
 }
 
 //////
@@ -794,47 +715,6 @@ using tbc_helpers::unwrapTBC;
 //////
 // Basic chunks based on ChunkTBC
 
-class ChunkOfGarbage: public ChunkTBC<ChunkOfGarbage>
-{
-private:
-	double continue_probability;
-
-	class Factory
-	{
-	private:
-		double continue_probability;
-	public:
-		Factory(double prob)
-		: continue_probability(prob)
-		{}
-
-		ChunkOfGarbage operator() (char c) const
-		{
-			return ChunkOfGarbage(continue_probability);
-		}
-	};
-public:
-	ChunkOfGarbage(double continue_probability)
-	: continue_probability(continue_probability)
-	{}
-
-	virtual const std::list<Transition<ChunkOfGarbage>> next() const
-	{
-		std::list<Transition<ChunkOfGarbage>> res;
-		res.push_back(Transition<ChunkOfGarbage>(create(continue_probability), continue_probability));
-		return res;
-	}
-
-	static ChunkState<ChunkOfGarbage>::Ptr create(double continue_probability)
-	{
-		return transform<ChunkOfGarbage>(SingleCharChunkState::create(), Factory(continue_probability));
-	}
-};
-
-ChunkState<ChunkOfGarbage>::Ptr garbage(double continue_probability)
-{
-	return continuation<ChunkOfGarbage>(ChunkOfGarbage::create(continue_probability));
-}
 
 template<typename Result, typename Chunk1, typename Chunk2>
 class Applier: public ChunkTBC<Result>
@@ -882,238 +762,373 @@ typename ChunkState<Result>::Ptr applyFirstToSecond(std::shared_ptr<ChunkState1>
 	return continuation<Result>(transform<Applier<Result, Chunk1, Chunk2>>(state1, typename Applier<Result, Chunk1, Chunk2>::Builder(state2)));
 }
 
-class SignChunk
+namespace number_impl
 {
-private:
-	bool negative;
+	class APositiveIntegerFirstChunkState;
 
-public:
-	typedef int NextChunkT;
-
-	SignChunk(bool negative)
-	: negative(negative)
-	{}
-
-	template<typename Number>
-	Number operator()(Number value) const
+	class APositiveIntegerChunkState: public ChunkState<int>
 	{
-		if( negative )
-		{
-			return -value;
-		}
-		else
-		{
-			return value;
-		}
-	}
-};
-
-class SignChunkState: public ChunkState<SignChunk>
-{
-private:
-	SignChunkState() {}
-
-public:
-	typedef std::shared_ptr<SignChunkState> Ptr;
-
-	static Ptr create()
-	{
-		return Ptr(new SignChunkState());
-	}
-
-	virtual double getProbability(CharT c) const
-	{
-		if( c == '-' )
-		{
-			return 0.5;
-		}
-		else
-		{
-			return 0;
-		}
-	}
-
-	virtual double getProbabilityFinished() const
-	{
-		return 0.5;
-	}
-
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
-	{
-		std::list<TransitionT> res;
-		if( c == '-' )
-		{
-			res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(true)), 1));
-		}
-		return res;
-	}
-
-	virtual SignChunk finish() const
-	{
-		return SignChunk(false);
-	}
-};
-
-ChunkState<int>::Ptr an_integer()
-{
-	return applyFirstToSecond<int>(SignChunkState::create(), a_positive_integer());
-}
-
-class FloatingPartChunkState: public ChunkState<double>
-{
-public:
-	typedef std::shared_ptr<FloatingPartChunkState> Ptr;
-
-private:
-	double value;
-	double order;
-	double prob_finish;
-
-	FloatingPartChunkState(double value, double order, double prob_finish)
-	: value(value), order(order), prob_finish(prob_finish)
-	{}
-
-	static Ptr create(double value, double order, double prob_finish)
-	{
-		return Ptr(new FloatingPartChunkState(value, order, prob_finish));
-	}
-
-public:
-	static Ptr create(double value)
-	{
-		return create(value, 0.1, 0.2);
-	}
-
-	virtual double getProbability(CharT c) const
-	{
-		if( (c >= '0') && (c <= '9') )
-		{
-			return (1 - prob_finish) / 10;
-		}
-		else
-		{
-			return 0;
-		}
-	}
-
-	virtual double getProbabilityFinished() const
-	{
-		return prob_finish;
-	}
-
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
-	{
-		std::list<TransitionT> res;
-		if( (c >= '0') && (c <= '9') )
-		{
-			res.push_back(TransitionT(create(value + order * (c - '0'), order / 10, prob_finish), 1));
-		}
-		return res;
-	}
-
-	virtual ChunkT finish() const
-	{
-		return value;
-	}
-};
-
-class FloatingPointChunkState: public ChunkState<double>
-{
-private:
-	double integer_part;
-	double probability_int;
-
-	FloatingPointChunkState(double integer_part, double probability_int)
-	: integer_part(integer_part), probability_int(probability_int)
-	{}
-
-public:
-	typedef std::shared_ptr<FloatingPointChunkState> Ptr;
-
-	static Ptr create(double integer_part, bool dot_is_optional)
-	{
-		if( dot_is_optional )
-		{
-			return Ptr(new FloatingPointChunkState(integer_part, 0.5));
-		}
-		else
-		{
-			return Ptr(new FloatingPointChunkState(integer_part, 0));
-		}
-	}
-
-	virtual double getProbability(CharT c) const
-	{
-		if( c == '.' )
-		{
-			return 1 - probability_int;
-		}
-		else
-		{
-			return 0;
-		}
-	}
-
-	virtual double getProbabilityFinished() const
-	{
-		return probability_int;
-	}
-
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
-	{
-		std::list<TransitionT> res;
-		if( c == '.' )
-		{
-			res.push_back(TransitionT(FloatingPartChunkState::create(integer_part), 1));
-		}
-		return res;
-	}
-
-	virtual ChunkT finish() const
-	{
-		return integer_part;
-	}
-};
-
-class FirstChunkOfFloat: public ChunkTBC<double>
-{
-private:
-	int integer_part;
-	bool dot_is_optional;
-
-public:
-	FirstChunkOfFloat(int integer_part, bool dot_is_optional)
-	: integer_part(integer_part), dot_is_optional(dot_is_optional)
-	{}
-
-	class Builder
-	{
-	private:
-		bool dot_is_optional;
 	public:
-		Builder(bool dot_is_optional)
-		: dot_is_optional(dot_is_optional)
+		typedef std::shared_ptr<APositiveIntegerChunkState> Ptr;
+		typedef ChunkState<int>::CharT CharT;
+		typedef ChunkState<int>::ChunkT ChunkT;
+		typedef Transition<ChunkT> TransitionT;
+
+	private:
+		double prob_finished;
+		int prefix;
+
+		APositiveIntegerChunkState(double prob_finished, int prefix)
+		: prob_finished(prob_finished), prefix(prefix)
 		{}
 
-		FirstChunkOfFloat operator()(int integer_part) const
+		static Ptr create(double prob_finished, int prefix)
 		{
-			return FirstChunkOfFloat(integer_part, dot_is_optional);
+			return Ptr(new APositiveIntegerChunkState(prob_finished, prefix));
+		}
+
+		static Ptr create(double prob_finished)
+		{
+			return create(prob_finished, 0);
+		}
+
+		friend APositiveIntegerFirstChunkState;
+	public:
+		virtual double getProbability(CharT c) const
+		{
+			if( (c >= '0') && (c <= '9') )
+			{
+				return (1 - prob_finished) / 10;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return prob_finished;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			if( (c >= '0') && (c <= '9') )
+			{
+				std::list<TransitionT> res;
+				res.push_back(TransitionT(create(prob_finished, prefix * 10 + (c - '0')), 1));
+				return res;
+			}
+			else
+			{
+				//throw std::logic_error(std::string("A call to APositiveInteger::getTransitions(") + c + ")");
+				return std::list<TransitionT>();
+			}
+		}
+
+		virtual int finish() const
+		{
+			return prefix;
 		}
 	};
 
-	virtual const std::list<TransitionT> next() const
+	class APositiveIntegerFirstChunkState: public ChunkState<int>
 	{
-		std::list<TransitionT> res;
-		res.push_back(TransitionT(FloatingPointChunkState::create(integer_part, dot_is_optional), 1));
-		return res;
-	}
-};
+	private:
+		double probability_finished;
 
-ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional)
-{
-	ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
-	return applyFirstToSecond<double>(SignChunkState::create(), positive_number);
+		APositiveIntegerFirstChunkState(double prob_finished)
+		: probability_finished(prob_finished)
+		{}
+
+	public:
+		typedef std::shared_ptr<APositiveIntegerFirstChunkState> Ptr;
+
+		static Ptr create(double prob_finished)
+		{
+			return Ptr(new APositiveIntegerFirstChunkState(prob_finished));
+		}
+
+		static Ptr create()
+		{
+			return create(0.25);
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			if( (c >= '0') && (c <= '9') )
+			{
+				return 0.1;
+			}
+			else
+			{
+				return 0.0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return 0;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			if( (c >= '0') && (c <= '9') )
+			{
+				res.push_back(TransitionT(APositiveIntegerChunkState::create(probability_finished, c - '0'), 1));
+			}
+			return res;
+		}
+
+		virtual int finish() const
+		{
+			throw std::logic_error("APositiveIntegerFirstChunkState has zero probabilityFinished but finish() has been called");
+		}
+	};
+
+	ChunkState<int>::Ptr a_positive_integer()
+	{
+		return APositiveIntegerFirstChunkState::create();
+	}
+
+	class SignChunk
+	{
+	private:
+		bool negative;
+
+	public:
+		typedef int NextChunkT;
+
+		SignChunk(bool negative)
+		: negative(negative)
+		{}
+
+		template<typename Number>
+		Number operator()(Number value) const
+		{
+			if( negative )
+			{
+				return -value;
+			}
+			else
+			{
+				return value;
+			}
+		}
+	};
+
+	class SignChunkState: public ChunkState<SignChunk>
+	{
+	private:
+		SignChunkState() {}
+
+	public:
+		typedef std::shared_ptr<SignChunkState> Ptr;
+
+		static Ptr create()
+		{
+			return Ptr(new SignChunkState());
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			if( c == '-' )
+			{
+				return 0.5;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return 0.5;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			if( c == '-' )
+			{
+				res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(true)), 1));
+			}
+			return res;
+		}
+
+		virtual SignChunk finish() const
+		{
+			return SignChunk(false);
+		}
+	};
+
+	ChunkState<int>::Ptr an_integer()
+	{
+		return applyFirstToSecond<int>(SignChunkState::create(), a_positive_integer());
+	}
+
+	class FloatingPartChunkState: public ChunkState<double>
+	{
+	public:
+		typedef std::shared_ptr<FloatingPartChunkState> Ptr;
+
+	private:
+		double value;
+		double order;
+		double prob_finish;
+
+		FloatingPartChunkState(double value, double order, double prob_finish)
+		: value(value), order(order), prob_finish(prob_finish)
+		{}
+
+		static Ptr create(double value, double order, double prob_finish)
+		{
+			return Ptr(new FloatingPartChunkState(value, order, prob_finish));
+		}
+
+	public:
+		static Ptr create(double value)
+		{
+			return create(value, 0.1, 0.2);
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			if( (c >= '0') && (c <= '9') )
+			{
+				return (1 - prob_finish) / 10;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return prob_finish;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			if( (c >= '0') && (c <= '9') )
+			{
+				res.push_back(TransitionT(create(value + order * (c - '0'), order / 10, prob_finish), 1));
+			}
+			return res;
+		}
+
+		virtual ChunkT finish() const
+		{
+			return value;
+		}
+	};
+
+	class FloatingPointChunkState: public ChunkState<double>
+	{
+	private:
+		double integer_part;
+		double probability_int;
+
+		FloatingPointChunkState(double integer_part, double probability_int)
+		: integer_part(integer_part), probability_int(probability_int)
+		{}
+
+	public:
+		typedef std::shared_ptr<FloatingPointChunkState> Ptr;
+
+		static Ptr create(double integer_part, bool dot_is_optional)
+		{
+			if( dot_is_optional )
+			{
+				return Ptr(new FloatingPointChunkState(integer_part, 0.5));
+			}
+			else
+			{
+				return Ptr(new FloatingPointChunkState(integer_part, 0));
+			}
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			if( c == '.' )
+			{
+				return 1 - probability_int;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return probability_int;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			if( c == '.' )
+			{
+				res.push_back(TransitionT(FloatingPartChunkState::create(integer_part), 1));
+			}
+			return res;
+		}
+
+		virtual ChunkT finish() const
+		{
+			return integer_part;
+		}
+	};
+
+	class FirstChunkOfFloat: public ChunkTBC<double>
+	{
+	private:
+		int integer_part;
+		bool dot_is_optional;
+
+	public:
+		FirstChunkOfFloat(int integer_part, bool dot_is_optional)
+		: integer_part(integer_part), dot_is_optional(dot_is_optional)
+		{}
+
+		class Builder
+		{
+		private:
+			bool dot_is_optional;
+		public:
+			Builder(bool dot_is_optional)
+			: dot_is_optional(dot_is_optional)
+			{}
+
+			FirstChunkOfFloat operator()(int integer_part) const
+			{
+				return FirstChunkOfFloat(integer_part, dot_is_optional);
+			}
+		};
+
+		virtual const std::list<TransitionT> next() const
+		{
+			std::list<TransitionT> res;
+			res.push_back(TransitionT(FloatingPointChunkState::create(integer_part, dot_is_optional), 1));
+			return res;
+		}
+	};
+
+	ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional)
+	{
+		ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+		return applyFirstToSecond<double>(SignChunkState::create(), positive_number);
+	}
 }
+
+using number_impl::a_positive_integer;
+using number_impl::an_integer;
+using number_impl::a_floating_point_number;
 
 //////
 // List template
@@ -1373,6 +1388,48 @@ using sequence_impl::sequence;
 //////
 // Testing code
 
+class ChunkOfGarbage: public ChunkTBC<ChunkOfGarbage>
+{
+private:
+	double continue_probability;
+
+	class Factory
+	{
+	private:
+		double continue_probability;
+	public:
+		Factory(double prob)
+		: continue_probability(prob)
+		{}
+
+		ChunkOfGarbage operator() (char c) const
+		{
+			return ChunkOfGarbage(continue_probability);
+		}
+	};
+public:
+	ChunkOfGarbage(double continue_probability)
+	: continue_probability(continue_probability)
+	{}
+
+	virtual const std::list<Transition<ChunkOfGarbage>> next() const
+	{
+		std::list<Transition<ChunkOfGarbage>> res;
+		res.push_back(Transition<ChunkOfGarbage>(create(continue_probability), continue_probability));
+		return res;
+	}
+
+	static ChunkState<ChunkOfGarbage>::Ptr create(double continue_probability)
+	{
+		return transform<ChunkOfGarbage>(SingleCharChunkState::create(), Factory(continue_probability));
+	}
+};
+
+ChunkState<ChunkOfGarbage>::Ptr garbageTBC(double continue_probability)
+{
+	return continuation<ChunkOfGarbage>(ChunkOfGarbage::create(continue_probability));
+}
+
 int char_to_int(char c)
 {
 	return c;
@@ -1383,7 +1440,7 @@ int main(int argc, char* argv[])
 	//std::shared_ptr<ChunkState<int>> start_state = transform<int>(SingleCharChunkState::create(), char_to_int);
 	//auto start_state = garbage(0.99);
 	//auto start_state = sequence(Nil().then(SingleCharChunkState::create()).then(SingleCharChunkState::create()).then(SingleCharChunkState::create()));
-	auto start_state = sequence(Nil().then(garbage(0.99)).then(a_floating_point_number(true)).then(garbage(0.99)));
+	auto start_state = sequence(Nil().then(garbage(0.01)).then(a_floating_point_number(true)).then(garbage(0.01)));
 	//auto start_state = sequence(Nil().then(garbage(0.99)).then(an_integer()).then(garbage(0.99)));
 	//auto start_state = a_positive_integer();
 	auto chunk = parse(std::cin, start_state);
