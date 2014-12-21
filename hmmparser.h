@@ -142,7 +142,7 @@ typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<S
 		{
 			it->prob /= totalProb;
 		}
-		
+
 		states = next;
 	}
 
@@ -557,6 +557,103 @@ typename ChunkState<Chunk2>::Ptr transform(std::shared_ptr<ChunkStateT1> state, 
 	return TransformedChunkState<typename ChunkStateT1::ChunkT, Chunk2, Transformation>::create(state, transformation);
 }
 
+template<typename Chunk>
+class AlternativesChunkState: public ChunkState<Chunk>
+{
+public:
+	typedef std::shared_ptr<AlternativesChunkState<Chunk>> Ptr;
+	typedef typename ChunkState<Chunk>::CharT CharT;
+	typedef typename ChunkState<Chunk>::ChunkT ChunkT;
+	typedef typename ChunkState<Chunk>::TransitionT TransitionT;
+
+private:
+	std::list<Transition<ChunkT>> alternatives;
+
+	AlternativesChunkState(const std::list<Transition<ChunkT>> alternatives)
+	: alternatives(alternatives)
+	{}
+
+public:
+	static Ptr create(const std::list<Transition<ChunkT>> alternatives)
+	{
+		return Ptr(new AlternativesChunkState(alternatives));
+	}
+
+	virtual double getProbability(CharT c) const
+	{
+		double res = 0.0;
+		for( Transition<ChunkT> alternative : alternatives )
+		{
+			res += alternative.prob * alternative.state->getProbability(c);
+		}
+		return res;
+	}
+
+	virtual double getProbabilityFinished() const
+	{
+		double res = 0.0;
+		for( Transition<ChunkT> alternative : alternatives )
+		{
+			res += alternative.prob * alternative.state->getProbabilityFinished();
+		}
+		return res;
+	}
+
+	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	{
+		std::list<TransitionT> res;
+		double total_prob = 0;
+		for( Transition<ChunkT> alternative : alternatives )
+		{
+			double prob = alternative.state->getProbability(c);
+			if( prob > 0 )
+			{
+				std::list<TransitionT> transitions = alternative.state->getTransitions(c);
+				for( TransitionT transition : transitions )
+				{
+					res.push_back(transition * alternative.prob * prob);
+				}
+				total_prob += prob;
+			}
+		}
+		for( Transition<ChunkT>& transition : res )
+		{
+			transition /= total_prob;
+		}
+		return res;
+	}
+
+	virtual ChunkT finish() const
+	{
+		std::list<ChunkT> res;
+		for( Transition<ChunkT> alternative : alternatives )
+		{
+			if( alternative.state->getProbabilityFinished() > 0 )
+			{
+				res.push_back(alternative.state->finish());
+			}
+		}
+		if( res.size() == 0 )
+		{
+			throw std::logic_error("Call of AlternativesChunkState::finish() when getProbabilityFinished() == 0");
+		}
+		else if( res.size() > 1 )
+		{
+			throw std::runtime_error("In AlternativesChunkState::finish(): more than one alternative could have generated the empty string");
+		}
+		else
+		{
+			return res.front();
+		}
+	}
+};
+
+template<typename ChunkT>
+typename ChunkState<ChunkT>::Ptr either(std::list<Transition<ChunkT>> alternatives)
+{
+	return AlternativesChunkState<ChunkT>::create(alternatives);
+}
+
 namespace continuation_impl
 {
 	/**
@@ -758,97 +855,6 @@ namespace continuation_impl
 		}
 	};
 
-	template<typename Chunk>
-	class AlternativesChunkState: public ChunkState<Chunk>
-	{
-	public:
-		typedef std::shared_ptr<AlternativesChunkState<Chunk>> Ptr;
-		typedef typename ChunkState<Chunk>::CharT CharT;
-		typedef typename ChunkState<Chunk>::ChunkT ChunkT;
-		typedef typename ChunkState<Chunk>::TransitionT TransitionT;
-
-	private:
-		std::list<Transition<ChunkT>> alternatives;
-
-		AlternativesChunkState(const std::list<Transition<ChunkT>> alternatives)
-		: alternatives(alternatives)
-		{}
-
-	public:
-		static Ptr create(const std::list<Transition<ChunkT>> alternatives)
-		{
-			return Ptr(new AlternativesChunkState(alternatives));
-		}
-
-		virtual double getProbability(CharT c) const
-		{
-			double res = 0.0;
-			for( Transition<ChunkT> alternative : alternatives )
-			{
-				res += alternative.prob * alternative.state->getProbability(c);
-			}
-			return res;
-		}
-
-		virtual double getProbabilityFinished() const
-		{
-			double res = 0.0;
-			for( Transition<ChunkT> alternative : alternatives )
-			{
-				res += alternative.prob * alternative.state->getProbabilityFinished();
-			}
-			return res;
-		}
-
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
-		{
-			std::list<TransitionT> res;
-			double total_prob = 0;
-			for( Transition<ChunkT> alternative : alternatives )
-			{
-				double prob = alternative.state->getProbability(c);
-				if( prob > 0 )
-				{
-					std::list<TransitionT> transitions = alternative.state->getTransitions(c);
-					for( TransitionT transition : transitions )
-					{
-						res.push_back(transition * alternative.prob * prob);
-					}
-					total_prob += prob;
-				}
-			}
-			for( Transition<ChunkT>& transition : res )
-			{
-				transition /= total_prob;
-			}
-			return res;
-		}
-
-		virtual ChunkT finish() const
-		{
-			std::list<ChunkT> res;
-			for( Transition<ChunkT> alternative : alternatives )
-			{
-				if( alternative.state->getProbabilityFinished() > 0 )
-				{
-					res.push_back(alternative.state->finish());
-				}
-			}
-			if( res.size() == 0 )
-			{
-				throw std::logic_error("Call of AlternativesChunkState::finish() when getProbabilityFinished() == 0");
-			}
-			else if( res.size() > 1 )
-			{
-				throw std::runtime_error("In AlternativesChunkState::finish(): more than one alternative could have generated the empty string");
-			}
-			else
-			{
-				return res.front();
-			}
-		}
-	};
-
 	template<typename LastChunk, typename FirstChunkState>
 	typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state)
 	{
@@ -915,6 +921,49 @@ namespace tbc_helpers
 using tbc_helpers::AsTBC;
 using tbc_helpers::wrapTBC;
 using tbc_helpers::unwrapTBC;
+
+template<typename ResultChunk, typename FirstChunk, typename Functor>
+class FollowerImpl: public ChunkTBC<ResultChunk>
+{
+private:
+	Functor follower_generator;
+	FirstChunk first_chunk;
+
+public:
+	FollowerImpl(Functor follower_generator, FirstChunk first_chunk)
+	: follower_generator(follower_generator), first_chunk(first_chunk)
+	{}
+
+	class Builder
+	{
+	private:
+		Functor follower_generator;
+
+	public:
+		Builder(Functor follower_generator)
+		: follower_generator(follower_generator)
+		{}
+
+		FollowerImpl<ResultChunk, FirstChunk, Functor> operator() (FirstChunk chunk) const
+		{
+			return FollowerImpl<ResultChunk, FirstChunk, Functor>(follower_generator, chunk);
+		}
+	};
+
+	virtual const std::list<Transition<ResultChunk>> next() const
+	{
+		std::list<Transition<ResultChunk>> res;
+		res.push_back(Transition<ResultChunk>(follower_generator(first_chunk), 1));
+		return res;
+	}
+};
+
+template<typename ResultChunk, typename FirstChunkState, typename Functor>
+typename ChunkState<ResultChunk>::Ptr follow(std::shared_ptr<FirstChunkState> first_state, Functor follower_generator)
+{
+	typedef FollowerImpl<ResultChunk, typename FirstChunkState::ChunkT, Functor> FollowerImplT;
+	return continuation<ResultChunk>(transform<FollowerImplT>(first_state, typename FollowerImplT::Builder(follower_generator)));
+}
 
 //////
 // Basic chunks based on ChunkTBC
@@ -1297,37 +1346,19 @@ namespace number_impl
 		}
 	};
 
-	class FirstChunkOfFloat: public ChunkTBC<double>
+	class FloatGenerator
 	{
 	private:
-		int integer_part;
 		bool dot_is_optional;
 
 	public:
-		FirstChunkOfFloat(int integer_part, bool dot_is_optional)
-		: integer_part(integer_part), dot_is_optional(dot_is_optional)
+		FloatGenerator(bool dot_is_optional)
+		: dot_is_optional(dot_is_optional)
 		{}
 
-		class Builder
+		ChunkState<double>::Ptr operator()(int integer_part) const
 		{
-		private:
-			bool dot_is_optional;
-		public:
-			Builder(bool dot_is_optional)
-			: dot_is_optional(dot_is_optional)
-			{}
-
-			FirstChunkOfFloat operator()(int integer_part) const
-			{
-				return FirstChunkOfFloat(integer_part, dot_is_optional);
-			}
-		};
-
-		virtual const std::list<TransitionT> next() const
-		{
-			std::list<TransitionT> res;
-			res.push_back(TransitionT(FloatingPointChunkState::create(integer_part, dot_is_optional), 1));
-			return res;
+			return FloatingPointChunkState::create(integer_part, dot_is_optional);
 		}
 	};
 
@@ -1424,7 +1455,8 @@ namespace number_impl
 
 	ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional, double probability_scientific)
 	{
-		ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+		//ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+		ChunkState<double>::Ptr positive_number = follow<double>(a_positive_integer(), FloatGenerator(dot_is_optional));
 		ChunkState<double>::Ptr positive_number_scientific = continuation<double>(transform<WantScientificPart>(positive_number, WantScientificPart::Builder(probability_scientific)));
 		return applyFirstToSecond<double>(SignChunkState::create(), positive_number_scientific);
 	}
@@ -1681,7 +1713,7 @@ namespace sequence_impl
 		typedef typename StatesToChunksConverter<StateList>::Chunks ParsedList;
 		typedef ListChunk<ParsedList, Nil> LastChunk;
 		typedef ListChunk<Nil, StateList> FirstChunk;
-		
+
 		typename ChunkState<LastChunk>::Ptr res = continuation<LastChunk>(transform<typename FirstChunk::NextChunkT>(states.head, FirstChunk(Nil(), states)));
 		return transform<ParsedList>(res, extractor<ParsedList>);
 	}
