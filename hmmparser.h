@@ -4,6 +4,7 @@
 #include <memory>
 #include <list>
 #include <stdexcept>
+#include <cmath>
 
 template<typename Chunk>
 struct Transition;
@@ -91,11 +92,12 @@ struct Transition
 	}
 };
 
-template<typename Chunk>
-Chunk parse(std::istream& strm, std::shared_ptr<ChunkState<Chunk>> state)
+template<typename StartingChunkStateT>
+typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<StartingChunkStateT> state)
 {
-	typedef Transition<Chunk> TransitionT;
+	typedef typename StartingChunkStateT::ChunkT Chunk;
 	typedef ChunkState<Chunk> ChunkStateT;
+	typedef Transition<Chunk> TransitionT;
 
 	std::list<TransitionT> states;
 	states.push_back(TransitionT(state, 1.0));
@@ -1139,6 +1141,10 @@ namespace number_impl
 			{
 				return 0.5;
 			}
+			else if( c == '+' )
+			{
+				return 0.25;
+			}
 			else
 			{
 				return 0;
@@ -1147,7 +1153,7 @@ namespace number_impl
 
 		virtual double getProbabilityFinished() const
 		{
-			return 0.5;
+			return 0.25;
 		}
 
 		virtual const std::list<TransitionT> getTransitions(CharT c) const
@@ -1156,6 +1162,10 @@ namespace number_impl
 			if( c == '-' )
 			{
 				res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(true)), 1));
+			}
+			else if( c == '+' )
+			{
+				res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(false)), 1));
 			}
 			return res;
 		}
@@ -1321,10 +1331,102 @@ namespace number_impl
 		}
 	};
 
-	ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional)
+	class ScientificPartState: public ChunkState<int>
+	{
+	public:
+		typedef std::shared_ptr<ScientificPartState> Ptr;
+
+	private:
+		double probability_scientific;
+
+		ScientificPartState(double probability_scientific)
+		: probability_scientific(probability_scientific)
+		{}
+
+	public:
+		static Ptr create(double probability_scientific)
+		{
+			return Ptr(new ScientificPartState(probability_scientific));
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			if( (c == 'e') || (c == 'E') )
+			{
+				return probability_scientific / 2;
+			}
+			else
+			{
+				return 0;
+			}
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			return 1 - probability_scientific;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			if( probability_scientific > 0 )
+			{
+				res.push_back(TransitionT(an_integer(), 1));
+			}
+			return res;
+		}
+
+		virtual int finish() const
+		{
+			return 0;
+		}
+	};
+
+	class WantScientificPart: public ChunkTBC<double>
+	{
+	private:
+		double base;
+		double probability_scientific;
+
+	public:
+		WantScientificPart(double base, double probability_scientific)
+		: base(base), probability_scientific(probability_scientific)
+		{}
+
+		class Builder
+		{
+		private:
+			double probability_scientific;
+
+		public:
+			Builder(double probability_scientific)
+			: probability_scientific(probability_scientific)
+			{}
+
+			WantScientificPart operator()(double base) const
+			{
+				return WantScientificPart(base, probability_scientific);
+			}
+		};
+
+		double operator()(int order) const
+		{
+			return base * std::pow(10, order);
+		}
+
+		virtual const std::list<TransitionT> next() const
+		{
+			std::list<TransitionT> res;
+			res.push_back(TransitionT(transform<double>(ScientificPartState::create(probability_scientific), *this), 1));
+			return res;
+		}
+	};
+
+	ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional, double probability_scientific)
 	{
 		ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
-		return applyFirstToSecond<double>(SignChunkState::create(), positive_number);
+		ChunkState<double>::Ptr positive_number_scientific = continuation<double>(transform<WantScientificPart>(positive_number, WantScientificPart::Builder(probability_scientific)));
+		return applyFirstToSecond<double>(SignChunkState::create(), positive_number_scientific);
 	}
 }
 
@@ -1583,9 +1685,26 @@ namespace sequence_impl
 		typename ChunkState<LastChunk>::Ptr res = continuation<LastChunk>(transform<typename FirstChunk::NextChunkT>(states.head, FirstChunk(Nil(), states)));
 		return transform<ParsedList>(res, extractor<ParsedList>);
 	}
+
+	template<int index, typename List>
+	typename list_template::impl::ListT_Getter<List, index>::TypeAt take_one(List list)
+	{
+		return list.template at<index>();
+	}
+
+	template<int index, typename List>
+	typename ChunkState<typename StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
+	one_in_sequence(List list)
+	{
+		typedef
+			typename ChunkState<typename StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
+			ResultT;
+		return transform<typename sequence_impl::StateToChunkConverter<ResultT>::ChunkT>(sequence(list), take_one<index, typename StatesToChunksConverter<List>::Chunks>);
+	}
 }
 
 using sequence_impl::sequence;
+using sequence_impl::one_in_sequence;
 
 template<typename BaseChunk>
 class StarChunk: public ChunkTBC<StarChunk<BaseChunk>>
