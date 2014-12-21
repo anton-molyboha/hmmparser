@@ -836,7 +836,53 @@ ChunkState<ChunkOfGarbage>::Ptr garbage(double continue_probability)
 	return continuation<ChunkOfGarbage>(ChunkOfGarbage::create(continue_probability));
 }
 
-class SignChunkTBC: public ChunkTBC<int>
+template<typename Result, typename Chunk1, typename Chunk2>
+class Applier: public ChunkTBC<Result>
+{
+private:
+	Chunk1 chunk1;
+	typename ChunkState<Chunk2>::Ptr state2;
+
+public:
+	Applier(Chunk1 chunk1, typename ChunkState<Chunk2>::Ptr state2)
+	: chunk1(chunk1), state2(state2)
+	{}
+
+	class Builder
+	{
+	private:
+		typename ChunkState<Chunk2>::Ptr state2;
+
+	public:
+		Builder(typename ChunkState<Chunk2>::Ptr state2)
+		: state2(state2)
+		{}
+
+		Applier<Result, Chunk1, Chunk2> operator() (Chunk1 chunk1) const
+		{
+			return Applier<Result, Chunk1, Chunk2>(chunk1, state2);
+		}
+	};
+
+	virtual const std::list<Transition<Result>> next() const
+	{
+		typename ChunkState<Result>::Ptr res = transform<Result>(state2, chunk1);
+
+		std::list<Transition<Result>> res_list;
+		res_list.push_back(Transition<Result>(res, 1.0));
+		return res_list;
+	}
+};
+
+template<typename Result, typename ChunkState1, typename ChunkState2>
+typename ChunkState<Result>::Ptr applyFirstToSecond(std::shared_ptr<ChunkState1> state1, std::shared_ptr<ChunkState2> state2)
+{
+	typedef typename ChunkState1::ChunkT Chunk1;
+	typedef typename ChunkState2::ChunkT Chunk2;
+	return continuation<Result>(transform<Applier<Result, Chunk1, Chunk2>>(state1, typename Applier<Result, Chunk1, Chunk2>::Builder(state2)));
+}
+
+class SignChunk
 {
 private:
 	bool negative;
@@ -844,18 +890,12 @@ private:
 public:
 	typedef int NextChunkT;
 
-	SignChunkTBC(bool negative)
+	SignChunk(bool negative)
 	: negative(negative)
 	{}
 
-	virtual const std::list<Transition<NextChunkT>> next() const
-	{
-		std::list<Transition<NextChunkT>> res;
-		res.push_back(Transition<NextChunkT>(transform<int>(a_positive_integer(), *this), 1));
-		return res;
-	}
-
-	int operator()(int value) const
+	template<typename Number>
+	Number operator()(Number value) const
 	{
 		if( negative )
 		{
@@ -868,7 +908,7 @@ public:
 	}
 };
 
-class SignChunkState: public ChunkState<SignChunkTBC>
+class SignChunkState: public ChunkState<SignChunk>
 {
 private:
 	SignChunkState() {}
@@ -903,20 +943,20 @@ public:
 		std::list<TransitionT> res;
 		if( c == '-' )
 		{
-			res.push_back(TransitionT(EmptyChunkState<SignChunkTBC>::create(SignChunkTBC(true)), 1));
+			res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(true)), 1));
 		}
 		return res;
 	}
 
-	virtual SignChunkTBC finish() const
+	virtual SignChunk finish() const
 	{
-		return SignChunkTBC(false);
+		return SignChunk(false);
 	}
 };
 
 ChunkState<int>::Ptr an_integer()
 {
-	return continuation<int>(SignChunkState::create());
+	return applyFirstToSecond<int>(SignChunkState::create(), a_positive_integer());
 }
 
 class FloatingPartChunkState: public ChunkState<double>
@@ -1071,7 +1111,8 @@ public:
 
 ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional)
 {
-	return continuation<double>(transform<FirstChunkOfFloat>(an_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+	ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+	return applyFirstToSecond<double>(SignChunkState::create(), positive_number);
 }
 
 //////
@@ -1343,6 +1384,7 @@ int main(int argc, char* argv[])
 	//auto start_state = garbage(0.99);
 	//auto start_state = sequence(Nil().then(SingleCharChunkState::create()).then(SingleCharChunkState::create()).then(SingleCharChunkState::create()));
 	auto start_state = sequence(Nil().then(garbage(0.99)).then(a_floating_point_number(true)).then(garbage(0.99)));
+	//auto start_state = sequence(Nil().then(garbage(0.99)).then(an_integer()).then(garbage(0.99)));
 	//auto start_state = a_positive_integer();
 	auto chunk = parse(std::cin, start_state);
 	std::cout << "Parse successful." << std::endl;
