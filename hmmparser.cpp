@@ -56,20 +56,26 @@ int main(int argc, char* argv[])
 	//std::shared_ptr<ChunkState<int>> start_state = transform<int>(SingleCharChunkState::create(), char_to_int);
 	//auto start_state = garbage(0.99);
 	//auto start_state = sequence(Nil().then(SingleCharChunkState::create()).then(SingleCharChunkState::create()).then(SingleCharChunkState::create()));
-	auto start_state = sequence(Nil().
-		then(garbage(0.01)).
-		then(literal("Hello")).
-		then(whitespace()).
-		then(literal("world")).
-		then(whitespace()).
-		then(a_floating_point_number(true)).
-		then(garbage(0.01))
+	auto start_state = star(
+		sequence(Nil().
+			then(garbage(0.01)).
+			then(literal("Hello")).
+			then(whitespace()).
+			then(literal("world")).
+			then(whitespace()).
+			then(a_floating_point_number(true)).
+			then(garbage(0.01))
+		),
+		0, -1
 	);
 	//auto start_state = sequence(Nil().then(garbage(0.99)).then(an_integer()).then(garbage(0.99)));
 	//auto start_state = a_positive_integer();
 	auto chunk = parse(std::cin, start_state);
 	std::cout << "Parse successful." << std::endl;
-	std::cout << chunk.at<1>() << std::endl;
+	for( auto element : chunk )
+	{
+		std::cout << element.at<5>() << std::endl;
+	}
 	//std::cout << chunk << std::endl;
 	return 0;
 }

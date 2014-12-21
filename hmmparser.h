@@ -1587,4 +1587,82 @@ namespace sequence_impl
 
 using sequence_impl::sequence;
 
+template<typename BaseChunk>
+class StarChunk: public ChunkTBC<StarChunk<BaseChunk>>
+{
+public:
+	typedef StarChunk<BaseChunk> NextChunkT;
+	typedef Transition<NextChunkT> TransitionT;
+
+private:
+	typename ChunkState<BaseChunk>::Ptr base_element;
+	std::list<BaseChunk> data;
+	int min_length;
+	int max_length;
+
+public:
+	StarChunk(typename ChunkState<BaseChunk>::Ptr start_state, int min_length, int max_length, std::list<BaseChunk> data)
+	: base_element(start_state), data(data), min_length(min_length), max_length(max_length)
+	{}
+
+	StarChunk(typename ChunkState<BaseChunk>::Ptr start_state, int min_length, int max_length)
+	: base_element(start_state), min_length(min_length), max_length(max_length)
+	{}
+
+	/**
+	 * Convert a newly read BaseChunk into the next StartChunk
+	 */
+	StarChunk<BaseChunk> operator() (BaseChunk element) const
+	{
+		std::list<BaseChunk> next_data = data;
+		next_data.push_back(element);
+		return StarChunk<BaseChunk>(base_element, min_length, max_length, next_data);
+	}
+
+	virtual const std::list<TransitionT> next() const
+	{
+		std::list<TransitionT> res;
+		double prob;
+		if( data.size() < min_length )
+		{
+			prob = 1;
+		}
+		else if( (max_length > 0) && (data.size() >= max_length) )
+		{
+			prob = 0;
+		}
+		else
+		{
+			prob = 0.9;
+		}
+		if( prob > 0 )
+		{
+			res.push_back(TransitionT(transform<StarChunk<BaseChunk>>(base_element, *this), prob));
+		}
+		return res;
+	}
+
+	static std::list<BaseChunk> unwrap(const StarChunk<BaseChunk>& star)
+	{
+		return star.data;
+	}
+};
+
+template<typename ChunkStateT>
+typename ChunkState<std::list<typename ChunkStateT::ChunkT>>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, std::list<typename ChunkStateT::ChunkT> initial_part)
+{
+	typedef typename ChunkStateT::ChunkT BaseChunk;
+	typedef StarChunk<BaseChunk> StarChunkT;
+	typedef std::list<BaseChunk> ResultT;
+	auto wrapper = StarChunkT(element, min_length, max_length, initial_part);
+	auto unwrapper = StarChunkT::unwrap;
+	return transform<ResultT>(continuation<StarChunkT>(transform<StarChunkT>(element, wrapper)), unwrapper);
+}
+
+template<typename ChunkStateT>
+typename ChunkState<std::list<typename ChunkStateT::ChunkT>>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length)
+{
+	return star(element, min_length, max_length, std::list<typename ChunkStateT::ChunkT>());
+}
+
 #endif
