@@ -605,9 +605,10 @@ namespace continuation_impl
 			char a;
 			char b;
 		};
-		static char test(ChunkTBC<typename Chunk::NextChunkT> *);
+		template<typename NextChunk>
+		static char test(ChunkTBC<NextChunk> *);
 		static No test(...);
-		static const bool value = sizeof(test(0)) == sizeof(char);
+		static const bool value = sizeof(test(static_cast<Chunk*>(0))) == sizeof(char);
 	};
 
 	template<typename LastChunk, typename CurChunk>
@@ -835,13 +836,13 @@ ChunkState<ChunkOfGarbage>::Ptr garbage(double continue_probability)
 	return continuation<ChunkOfGarbage>(ChunkOfGarbage::create(continue_probability));
 }
 
-class SignChunkTBC: public ChunkTBC<AsTBC<int>>
+class SignChunkTBC: public ChunkTBC<int>
 {
 private:
 	bool negative;
 
 public:
-	typedef AsTBC<int> NextChunkT;
+	typedef int NextChunkT;
 
 	SignChunkTBC(bool negative)
 	: negative(negative)
@@ -850,7 +851,7 @@ public:
 	virtual const std::list<Transition<NextChunkT>> next() const
 	{
 		std::list<Transition<NextChunkT>> res;
-		res.push_back(Transition<NextChunkT>(wrapTBC(transform<int>(a_positive_integer(), *this)), 1));
+		res.push_back(Transition<NextChunkT>(transform<int>(a_positive_integer(), *this), 1));
 		return res;
 	}
 
@@ -915,7 +916,7 @@ public:
 
 ChunkState<int>::Ptr an_integer()
 {
-	return unwrapTBC(continuation<AsTBC<int>>(SignChunkState::create()));
+	return continuation<int>(SignChunkState::create());
 }
 
 class FloatingPartChunkState: public ChunkState<double>
@@ -1034,7 +1035,7 @@ public:
 	}
 };
 
-class FirstChunkOfFloat: public ChunkTBC<AsTBC<double>>
+class FirstChunkOfFloat: public ChunkTBC<double>
 {
 private:
 	int integer_part;
@@ -1063,14 +1064,14 @@ public:
 	virtual const std::list<TransitionT> next() const
 	{
 		std::list<TransitionT> res;
-		res.push_back(TransitionT(wrapTBC(FloatingPointChunkState::create(integer_part, dot_is_optional)), 1));
+		res.push_back(TransitionT(FloatingPointChunkState::create(integer_part, dot_is_optional), 1));
 		return res;
 	}
 };
 
 ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional)
 {
-	return unwrapTBC(continuation<AsTBC<double>>(transform<FirstChunkOfFloat>(an_integer(), FirstChunkOfFloat::Builder(dot_is_optional))));
+	return continuation<double>(transform<FirstChunkOfFloat>(an_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
 }
 
 //////
