@@ -60,14 +60,26 @@ struct Transition
 	:state(state), prob(prob)
 	{}
 
-	Transition<Chunk> operator* (double prob_multiplier)
+	Transition<Chunk> operator* (double prob_multiplier) const
 	{
 		return Transition<Chunk>(state, prob * prob_multiplier);
 	}
 
-	Transition<Chunk> operator/ (double prob_multiplier)
+	Transition<Chunk> operator/ (double prob_multiplier) const
 	{
 		return Transition<Chunk>(state, prob / prob_multiplier);
+	}
+
+	Transition<Chunk>& operator *= (double prob_multiplier)
+	{
+		prob *= prob_multiplier;
+		return *this;
+	}
+
+	Transition<Chunk>& operator /= (double prob_multiplier)
+	{
+		prob /= prob_multiplier;
+		return *this;
 	}
 
 	template<typename ChunkStateT>
@@ -420,290 +432,307 @@ typename ChunkState<Chunk2>::Ptr transform(std::shared_ptr<ChunkStateT1> state, 
 	return TransformedChunkState<typename ChunkStateT1::ChunkT, Chunk2, Transformation>::create(state, transformation);
 }
 
-/**
- * A chunk type which knows what kind of chunk to read next
- */
-template<typename NextChunk>
-class ChunkTBC    // TBC stands for "to be continued"
+namespace continuation_impl
 {
-public:
-	typedef NextChunk NextChunkT;
-	typedef Transition<NextChunkT> TransitionT;
-
-	virtual const std::list<Transition<NextChunk>> next() const = 0;
-
-	virtual double probabilityFinished() const
+	/**
+	 * A chunk type which knows what kind of chunk to read next
+	 */
+	template<typename NextChunk>
+	class ChunkTBC    // TBC stands for "to be continued"
 	{
-		double res = 1;
-		for( auto transition : next() )
+	public:
+		typedef NextChunk NextChunkT;
+		typedef Transition<NextChunkT> TransitionT;
+
+		virtual const std::list<Transition<NextChunk>> next() const = 0;
+
+		virtual double probabilityFinished() const
 		{
-			res -= transition.prob;
-		}
-		return res;
-	}
-};
-
-template<typename ToType, typename FromType>
-class TypeCheckHelper
-{
-public:
-	static ToType check(FromType arg)
-	{
-		throw std::runtime_error("Type mismatch");
-	}
-};
-
-template<typename Type>
-class TypeCheckHelper<Type, Type>
-{
-public:
-	static Type check(Type arg)
-	{
-		return arg;
-	}
-};
-
-template<typename ToType, typename FromType>
-ToType type_check(FromType arg)
-{
-	return TypeCheckHelper<ToType, FromType>::check(arg);
-}
-
-/**
- * Converts a ChunkState whose Chunk type derives from ChunkTBC into
- * a ChunkState which will read not only this chunk, but also any continuation.
- */
-template<typename LastChunk, typename CurChunk>
-class ContinuedChunkState: public ChunkState<LastChunk>
-{
-public:
-	typedef std::shared_ptr<ContinuedChunkState<LastChunk, CurChunk>> Ptr;
-	typedef typename ChunkState<LastChunk>::CharT CharT;
-	typedef typename ChunkState<LastChunk>::ChunkT ChunkT;
-	typedef typename ChunkState<LastChunk>::TransitionT TransitionT;
-
-private:
-	typename ChunkState<CurChunk>::Ptr base;
-
-	static constexpr double negligible = 1e-5;
-
-	ContinuedChunkState(typename ChunkState<CurChunk>::Ptr base)
-	: base(base)
-	{}
-
-	template<typename Chunk>
-	double getProbabilityLoop(std::list<Transition<Chunk>> transitions, CharT c) const
-	{
-		typedef typename Chunk::NextChunkT NextChunk;
-		std::list<Transition<NextChunk>> next;
-
-		double res = 0;
-		for( Transition<Chunk> transition : transitions )
-		{
-			res += transition.prob * transition.state->getProbability(c);
-			double fprob = transition.prob * transition.state->getProbabilityFinished();
-			if( fprob > negligible )
+			double res = 1;
+			for( auto transition : next() )
 			{
-				for( Transition<NextChunk> trans : transition.state->finish().next() )
-				{
-					next.push_back(Transition<NextChunk>(trans.state, trans.prob * fprob));
-				}
+				res -= transition.prob;
 			}
-		}
-
-		if( next.size() == 0 )
-		{
 			return res;
 		}
-		else
-		{
-			return res + getProbabilityLoop(next, c);
-		}
-	}
-
-	template<typename Chunk>
-	double probabilityFinishedLoop(std::list<Transition<Chunk>> transitions) const
-	{
-		typedef typename Chunk::NextChunkT NextChunk;
-		std::list<Transition<NextChunk>> next;
-
-		double res = 0;
-		for( Transition<Chunk> transition : transitions )
-		{
-			double fprob = transition.prob * transition.state->getProbabilityFinished();
-			if( fprob > negligible )
-			{
-				res += fprob * transition.state->finish().probabilityFinished();
-				for( Transition<NextChunk> trans : transition.state->finish().next() )
-				{
-					next.push_back(trans * fprob);
-				}
-			}
-		}
-
-		if( next.size() == 0 )
-		{
-			return res;
-		}
-		else
-		{
-			return res + probabilityFinishedLoop(next);
-		}
-	}
-
-	template<typename Chunk>
-	const std::list<TransitionT> transitionsLoop(std::list<Transition<Chunk>> transitions, CharT c) const
-	{
-		std::list<TransitionT> res;
-		std::list<Transition<typename Chunk::NextChunkT>> next;
-
-		for( Transition<Chunk> transition : transitions )
-		{
-			double char_prob = transition.state->getProbability(c);
-			if( char_prob > 0 )
-			{
-				for( Transition<Chunk> transition1 : transition.state->getTransitions(c) )
-				{
-					res.push_back(TransitionT(ContinuedChunkState<LastChunk, Chunk>::create(transition1.state), transition.prob * char_prob * transition1.prob));
-				}
-			}
-
-			double fprob = transition.prob * transition.state->getProbabilityFinished();
-			if( fprob > negligible )
-			{
-				for( Transition<typename Chunk::NextChunkT> trans : transition.state->finish().next() )
-				{
-					next.push_back(trans * fprob);
-				}
-			}
-		}
-
-		if( next.size() > 0 )
-		{
-			for( TransitionT trans : transitionsLoop(next, c) )
-			{
-				res.push_back(trans);
-			}
-		}
-
-		return res;
-	}
-
-//	template<typename Chunk>
-//	class FinishHelper
-//	{
-//	public:
-//		static LastChunk finish(Chunk chunk)
-//		{
-//			throw runtime_error("Type mismatch in ContinuedChunkState.finish()");
-//		}
-//	};
-//
-//	template<>
-//	class FinishHelper<LastChunk>
-//	{
-//	public:
-//		static LastChunk finish(LastChunk chunk)
-//		{
-//			return chunk;
-//		}
-//	};
-
-public:
-	static Ptr create(typename ChunkState<CurChunk>::Ptr base)
-	{
-		return Ptr(new ContinuedChunkState(base));
-	}
-
-	virtual double getProbability(CharT c) const
-	{
-		double res = base->getProbability(c);
-		double prob = base->getProbabilityFinished();
-		if( prob > negligible )
-		{
-			std::list<Transition<typename CurChunk::NextChunkT>> next = base->finish().next();
-			std::list<Transition<typename CurChunk::NextChunkT>> scaled;
-			for( Transition<typename CurChunk::NextChunkT> transition : next )
-			{
-				scaled.push_back(Transition<typename CurChunk::NextChunkT>(transition.state, transition.prob * prob));
-			}
-			res += getProbabilityLoop(scaled, c);
-		}
-		return res;
 	};
 
-	virtual double getProbabilityFinished() const
+	template<typename ToType, typename FromType>
+	class TypeCheckHelper
 	{
-		double prob = base->getProbabilityFinished();
-		if( prob > negligible )
+	public:
+		static ToType check(FromType arg)
 		{
-			double res = prob * base->finish().probabilityFinished();
-			std::list<Transition<typename CurChunk::NextChunkT>> next = base->finish().next();
-			std::list<Transition<typename CurChunk::NextChunkT>> scaled;
-			for( Transition<typename CurChunk::NextChunkT> transition : next )
-			{
-				scaled.push_back(transition * prob);
-			}
-			res += probabilityFinishedLoop(scaled);
-			return res;
+			throw std::runtime_error("Type mismatch");
 		}
-		else
+	};
+
+	template<typename Type>
+	class TypeCheckHelper<Type, Type>
+	{
+	public:
+		static Type check(Type arg)
+		{
+			return arg;
+		}
+	};
+
+	template<typename ToType, typename FromType>
+	ToType type_check(FromType arg)
+	{
+		return TypeCheckHelper<ToType, FromType>::check(arg);
+	}
+
+	template<typename LastChunk, typename CurChunk>
+	class ContinuationHelper;
+
+	/**
+	 * The state of the continuation of a ChunkTBC where CurChunk will not be finished before the current character.
+	 */
+	template<typename LastChunk, typename CurChunk>
+	class ContinuedChunkStateUnfinished: public ChunkState<LastChunk>
+	{
+	public:
+		typedef std::shared_ptr<ContinuedChunkStateUnfinished<LastChunk, CurChunk>> Ptr;
+		typedef typename ChunkState<LastChunk>::CharT CharT;
+		typedef typename ChunkState<LastChunk>::ChunkT ChunkT;
+		typedef typename ChunkState<LastChunk>::TransitionT TransitionT;
+
+	private:
+		typename ChunkState<CurChunk>::Ptr base;
+
+		ContinuedChunkStateUnfinished(typename ChunkState<CurChunk>::Ptr base)
+		: base(base)
+		{}
+
+	public:
+		static Ptr create(typename ChunkState<CurChunk>::Ptr base)
+		{
+			return Ptr(new ContinuedChunkStateUnfinished(base));
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			return base->getProbability(c) / (1 - base->getProbabilityFinished());
+		}
+
+		virtual double getProbabilityFinished() const
 		{
 			return 0;
 		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			return ContinuationHelper<LastChunk, CurChunk>::expandTransitions(base->getTransitions(c));
+		}
+
+		virtual ChunkT finish() const
+		{
+			throw std::runtime_error("ContinuedChunkStateUnfinished::finish() has been called");
+		}
 	};
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	template<typename LastChunk, typename CurChunk, bool isTBC>
+	class ContinuationHelperImpl;
+
+	// The case of CurChunk is a ChunkTBC
+	template<typename LastChunk, typename CurChunk>
+	class ContinuationHelperImpl<LastChunk, CurChunk, true>
 	{
-		std::list<typename ChunkState<CurChunk>::TransitionT> transitions = base->getTransitions(c);
-		std::list<TransitionT> res;
-		for( typename ChunkState<CurChunk>::TransitionT transition : base->getTransitions(c) )
-		{
-			res.push_back(transition.with_state(ContinuedChunkState<LastChunk, CurChunk>::create(transition.state)));
-		}
+	public:
+		static constexpr double negligible = 1e-5;
 
-		double fprob = base->getProbabilityFinished();
-		if( fprob > negligible )
+		static const std::list<Transition<LastChunk>> expandTransitions(const std::list<Transition<CurChunk>> transitions)
 		{
-			std::list<Transition<typename CurChunk::NextChunkT>> next = base->finish().next();
-			std::list<Transition<typename CurChunk::NextChunkT>> scaled;
-			for( Transition<typename CurChunk::NextChunkT> transition : next )
+			typedef typename CurChunk::NextChunkT NextChunk;
+			std::list<Transition<LastChunk>> res;
+			std::list<Transition<NextChunk>> next;
+			for( Transition<CurChunk> transition : transitions )
 			{
-				scaled.push_back(transition * fprob);
+				double prob_transition_finished = transition.state->getProbabilityFinished();
+				if( prob_transition_finished < 1 )
+				{
+					res.push_back(Transition<LastChunk>(
+						ContinuedChunkStateUnfinished<LastChunk, CurChunk>::create(transition.state),
+						transition.prob * (1 - prob_transition_finished)
+					));
+				}
+				if( transition.prob * prob_transition_finished > negligible )
+				{
+					CurChunk curChunk = transition.state->finish();
+					for( Transition<NextChunk> next_transition : curChunk.next() )
+					{
+						next.push_back(next_transition * transition.prob * prob_transition_finished);
+					}
+					if( curChunk.probabilityFinished() > 0 )
+					{
+						res.push_back(Transition<LastChunk>(
+							EmptyChunkState<LastChunk>::create(TypeCheckHelper<LastChunk, CurChunk>::check(curChunk)),
+							transition.prob * prob_transition_finished * curChunk.probabilityFinished()
+						));
+					}
+				}
 			}
-			for( TransitionT transition : transitionsLoop(scaled, c) )
+			if( next.size() > 0 )
 			{
-				res.push_back(transition);
+				for( Transition<LastChunk> transition : ContinuationHelper<LastChunk, NextChunk>::expandTransitions(next) )
+				{
+					res.push_back(transition);
+				}
 			}
+			return res;
 		}
+	};
 
-		double total_prob = 0;
-		for( auto transition : res )
-		{
-			total_prob += transition.prob;
-		}
-
-		std::list<TransitionT> scaled;
-		for( auto transition : res )
-		{
-			scaled.push_back(transition / total_prob);
-		}
-		return scaled;
-	}
-
-	virtual ChunkT finish() const
+	// The case of CurChunk not an instance of ChunkTBC, in which case it must also be the LastChunk
+	template<typename LastChunk>
+	class ContinuationHelperImpl<LastChunk, LastChunk, false>
 	{
-		// TODO: if type does not match, recurse into possible continuations
-		return type_check<LastChunk>(base->finish());
-	}
-};
+	public:
+		static const std::list<Transition<LastChunk>> expandTransitions(const std::list<Transition<LastChunk>> transitions)
+		{
+			return transitions;
+		}
+	};
 
-template<typename LastChunk, typename FirstChunkState>
-typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state)
-{
-	typedef typename FirstChunkState::ChunkT FirstChunk;
-	return ContinuedChunkState<LastChunk, FirstChunk>::create(start_state);
+	// Using SFINAE to test if a given Chunk derives from ChunkTBC
+	template<typename Chunk>
+	class IsTBC
+	{
+	public:
+		struct No
+		{
+			char a;
+			char b;
+		};
+		static char test(ChunkTBC<typename Chunk::NextChunkT> *);
+		static No test(...);
+		static const bool value = sizeof(test(0)) == sizeof(char);
+	};
+
+	template<typename LastChunk, typename CurChunk>
+	class ContinuationHelper
+	{
+	public:
+		static const std::list<Transition<LastChunk>> expandTransitions(std::list<Transition<CurChunk>> transitions)
+		{
+			return ContinuationHelperImpl<LastChunk, CurChunk, IsTBC<CurChunk>::value>::expandTransitions(transitions);
+		}
+
+		static const std::list<Transition<LastChunk>> expandTransition(Transition<CurChunk> transition)
+		{
+			std::list<Transition<CurChunk>> transition_list;
+			transition_list.push_back(transition);
+			return expandTransitions(transition_list);
+		}
+
+		static const std::list<Transition<LastChunk>> expandState(typename ChunkState<CurChunk>::Ptr state)
+		{
+			return expandTransition(Transition<CurChunk>(state, 1));
+		}
+	};
+
+	template<typename Chunk>
+	class AlternativesChunkState: public ChunkState<Chunk>
+	{
+	public:
+		typedef std::shared_ptr<AlternativesChunkState<Chunk>> Ptr;
+		typedef typename ChunkState<Chunk>::CharT CharT;
+		typedef typename ChunkState<Chunk>::ChunkT ChunkT;
+		typedef typename ChunkState<Chunk>::TransitionT TransitionT;
+
+	private:
+		std::list<Transition<ChunkT>> alternatives;
+
+		AlternativesChunkState(const std::list<Transition<ChunkT>> alternatives)
+		: alternatives(alternatives)
+		{}
+
+	public:
+		static Ptr create(const std::list<Transition<ChunkT>> alternatives)
+		{
+			return Ptr(new AlternativesChunkState(alternatives));
+		}
+
+		virtual double getProbability(CharT c) const
+		{
+			double res = 0.0;
+			for( Transition<ChunkT> alternative : alternatives )
+			{
+				res += alternative.prob * alternative.state->getProbability(c);
+			}
+			return res;
+		}
+
+		virtual double getProbabilityFinished() const
+		{
+			double res = 0.0;
+			for( Transition<ChunkT> alternative : alternatives )
+			{
+				res += alternative.prob * alternative.state->getProbabilityFinished();
+			}
+			return res;
+		}
+
+		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		{
+			std::list<TransitionT> res;
+			double total_prob = 0;
+			for( Transition<ChunkT> alternative : alternatives )
+			{
+				double prob = alternative.state->getProbability(c);
+				if( prob > 0 )
+				{
+					std::list<TransitionT> transitions = alternative.state->getTransitions(c);
+					for( TransitionT transition : transitions )
+					{
+						res.push_back(transition * alternative.prob * prob);
+					}
+					total_prob += prob;
+				}
+			}
+			for( Transition<ChunkT>& transition : res )
+			{
+				transition /= total_prob;
+			}
+			return res;
+		}
+
+		virtual ChunkT finish() const
+		{
+			std::list<ChunkT> res;
+			for( Transition<ChunkT> alternative : alternatives )
+			{
+				if( alternative.state->getProbabilityFinished() > 0 )
+				{
+					res.push_back(alternative.state->finish());
+				}
+			}
+			if( res.size() == 0 )
+			{
+				throw std::logic_error("Call of AlternativesChunkState::finish() when getProbabilityFinished() == 0");
+			}
+			else if( res.size() > 1 )
+			{
+				throw std::runtime_error("In AlternativesChunkState::finish(): more than one alternative could have generated the empty string");
+			}
+			else
+			{
+				return res.front();
+			}
+		}
+	};
+
+	template<typename LastChunk, typename FirstChunkState>
+	typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state)
+	{
+		typedef typename FirstChunkState::ChunkT FirstChunk;
+		return AlternativesChunkState<LastChunk>::create(ContinuationHelper<LastChunk, FirstChunk>::expandState(start_state));
+	}
 }
+
+using continuation_impl::ChunkTBC;
+using continuation_impl::continuation;
 
 namespace tbc_helpers
 {
@@ -1310,8 +1339,9 @@ int char_to_int(char c)
 int main(int argc, char* argv[])
 {
 	//std::shared_ptr<ChunkState<int>> start_state = transform<int>(SingleCharChunkState::create(), char_to_int);
+	//auto start_state = garbage(0.99);
 	//auto start_state = sequence(Nil().then(SingleCharChunkState::create()).then(SingleCharChunkState::create()).then(SingleCharChunkState::create()));
-	auto start_state = sequence(Nil().then(garbage(0.99)).then(a_floating_point_number(false)).then(garbage(0.99)));
+	auto start_state = sequence(Nil().then(garbage(0.99)).then(a_floating_point_number(true)).then(garbage(0.99)));
 	//auto start_state = a_positive_integer();
 	auto chunk = parse(std::cin, start_state);
 	std::cout << "Parse successful." << std::endl;
