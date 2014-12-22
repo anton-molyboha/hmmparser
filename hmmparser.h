@@ -301,6 +301,11 @@ ChunkState<Void>::Ptr garbage(double probability_finish)
 	return GarbageChunkState::create(probability_finish);
 }
 
+ChunkState<Void>::Ptr garbage()
+{
+	return garbage(0.01);
+}
+
 bool is_whitespace(char c)
 {
 	return (c == ' ') || (c == '\t');
