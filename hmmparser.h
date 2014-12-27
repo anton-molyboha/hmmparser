@@ -1097,7 +1097,7 @@ namespace number_impl
 			return create(prob_finished, 0);
 		}
 
-		friend APositiveIntegerFirstChunkState;
+		friend class APositiveIntegerFirstChunkState;
 	public:
 		virtual double getProbability(CharT c) const
 		{
