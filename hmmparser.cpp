@@ -28,9 +28,9 @@ public:
 	: continue_probability(continue_probability)
 	{}
 
-	virtual const std::list<Transition<ChunkOfGarbage>> next() const
+	virtual const Containers<Transition<ChunkOfGarbage>>::list next() const
 	{
-		std::list<Transition<ChunkOfGarbage>> res;
+		Containers<Transition<ChunkOfGarbage>>::list res;
 		res.push_back(Transition<ChunkOfGarbage>(create(continue_probability), continue_probability));
 		return res;
 	}

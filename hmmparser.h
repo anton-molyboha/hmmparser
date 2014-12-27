@@ -5,6 +5,15 @@
 #include <list>
 #include <stdexcept>
 #include <cmath>
+#include "list2.h"
+
+template<typename T>
+class Containers
+{
+public:
+	typedef list2<T> list;
+	typedef std::shared_ptr<T> ChunkPtr;    // This could have been some kind of intrusive_ptr, for example.
+};
 
 template<typename Chunk>
 struct Transition;
@@ -38,7 +47,7 @@ public:
 	 * A transition is a state that may follow this state, and the probability with
 	 * which that state will follow.
 	 */
-	virtual const std::list<TransitionT> getTransitions(CharT c) const = 0;
+	virtual const typename Containers<TransitionT>::list getTransitions(CharT c) const = 0;
 
 	/**
 	 * Assume the chunk is finished and generate the object representing the chunk.
@@ -92,43 +101,38 @@ struct Transition
 	}
 };
 
-template<typename StartingChunkStateT>
-typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<StartingChunkStateT> state)
+template<typename Chunk>
+class Parser
 {
-	typedef typename StartingChunkStateT::ChunkT Chunk;
+public:
+	//typedef typename StartingChunkStateT::ChunkT Chunk;
 	typedef ChunkState<Chunk> ChunkStateT;
 	typedef Transition<Chunk> TransitionT;
 
-	std::list<TransitionT> states;
-	states.push_back(TransitionT(state, 1.0));
-	while(strm)
-	{
-		std::list<TransitionT> next;
+private:
+	typename Containers<TransitionT>::list states;
 
-		char chr = strm.get();
-		if( strm )
+public:
+	Parser(typename Containers<TransitionT>::list initial_states)
+	: states(initial_states)
+	{}
+
+	Parser(typename ChunkStateT::Ptr initial_state)
+	: states{TransitionT(initial_state, 1)}
+	{}
+
+	void next_char(char chr)
+	{
+		typename Containers<TransitionT>::list next;
+		for( auto it = states.begin(); it != states.end(); ++it )
 		{
-			for( auto it = states.begin(); it != states.end(); ++it )
+			double prob = it->prob * it->state->getProbability(chr);
+			if( prob > 0 )
 			{
-				double prob = it->prob * it->state->getProbability(chr);
-				if( prob > 0 )
+				typename Containers<TransitionT>::list trans = it->state->getTransitions(chr);
+				for( auto it2 = trans.begin(); it2 != trans.end(); ++it2 )
 				{
-					std::list<TransitionT> trans = it->state->getTransitions(chr);
-					for( auto it2 = trans.begin(); it2 != trans.end(); ++it2 )
-					{
-						next.push_back(TransitionT(it2->state, it2->prob * prob));
-					}
-				}
-			}
-		}
-		else
-		{
-			for( auto it = states.begin(); it != states.end(); ++it )
-			{
-				double prob = it->prob * it->state->getProbabilityFinished();
-				if( prob > 0 )
-				{
-					next.push_back(TransitionT(it->state, it->prob * prob));
+					next.push_back(TransitionT(it2->state, it2->prob * prob));
 				}
 			}
 		}
@@ -138,33 +142,73 @@ typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<S
 		{
 			totalProb += it->prob;
 		}
+
+		states.clear();
 		for( auto it = next.begin(); it != next.end(); ++it )
 		{
-			it->prob /= totalProb;
+			states.push_back(*it / totalProb);
 		}
-
-		states = next;
 	}
 
-	if( states.empty() )
+	Chunk finish()
 	{
-		throw std::runtime_error("Syntax error (could not parse)");
-	}
-	else
-	{
-		double maxProb = states.front().prob;
-		typename ChunkStateT::Ptr res = states.front().state;
+		typename Containers<TransitionT>::list next;
+
 		for( auto it = states.begin(); it != states.end(); ++it )
 		{
-			if( it->prob > maxProb )
+			double prob = it->prob * it->state->getProbabilityFinished();
+			if( prob > 0 )
 			{
-				maxProb = it->prob;
-				res = it->state;
+				next.push_back(TransitionT(it->state, it->prob * prob));
 			}
 		}
 
-		return res->finish();
+		if( next.empty() )
+		{
+			throw std::runtime_error("Syntax error (could not parse)");
+		}
+		else
+		{
+			double maxProb = next.front().prob;
+			typename ChunkStateT::Ptr res = next.front().state;
+			for( auto it = next.begin(); it != next.end(); ++it )
+			{
+				if( it->prob > maxProb )
+				{
+					maxProb = it->prob;
+					res = it->state;
+				}
+			}
+
+			return res->finish();
+		}
 	}
+
+	typename Containers<TransitionT>::list get_states()
+	{
+		return states;
+	}
+};
+
+template<typename StartingChunkStateT>
+typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<StartingChunkStateT> state)
+{
+	typedef typename StartingChunkStateT::ChunkT Chunk;
+	typedef ChunkState<Chunk> ChunkStateT;
+	typedef Transition<Chunk> TransitionT;
+
+	Parser<Chunk> parser(state);
+
+	while(strm)
+	{
+		char chr = strm.get();
+		if( strm )
+		{
+			parser.next_char(chr);
+		}
+	}
+
+	return parser.finish();
 }
 
 //////
@@ -203,9 +247,9 @@ public:
 		return 1;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const typename Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		return std::list<TransitionT>();
+		return typename Containers<TransitionT>::list();
 	}
 
 	virtual ChunkT finish() const
@@ -239,9 +283,9 @@ public:
 		return 0;
 	}
 
-	virtual const std::list<Transition<char>> getTransitions(char c) const
+	virtual const Containers<Transition<char>>::list getTransitions(char c) const
 	{
-		std::list<Transition<char>> res;
+		Containers<Transition<char>>::list res;
 		res.push_back(Transition<char>(EmptyChunkState<char>::create(c), 1));
 		return res;
 	}
@@ -283,9 +327,9 @@ public:
 		return probability_finish;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		std::list<TransitionT> res;
+		Containers<TransitionT>::list res;
 		res.push_back(TransitionT(create(probability_finish), 1));
 		return res;
 	}
@@ -351,9 +395,9 @@ public:
 		return probability_finish;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		std::list<TransitionT> res;
+		Containers<TransitionT>::list res;
 		if( is_whitespace(c) )
 		{
 			res.push_back(TransitionT(WhitespaceChunkState::create(probability_finish), 1));
@@ -402,9 +446,9 @@ public:
 		return 0;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		std::list<TransitionT> res;
+		Containers<TransitionT>::list res;
 		res.push_back(TransitionT(WhitespaceChunkState::create(probability_finish), 1));
 		return res;
 	}
@@ -471,9 +515,9 @@ public:
 		return 0;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		std::list<TransitionT> res;
+		Containers<TransitionT>::list res;
 		if( c == literal[pos] )
 		{
 			if( pos + 1 < literal.length() )
@@ -539,10 +583,10 @@ public:
 		return base->getProbabilityFinished();
 	}
 
-	virtual const std::list<Transition<Chunk2>> getTransitions(char c) const
+	virtual const typename Containers<Transition<Chunk2>>::list getTransitions(char c) const
 	{
-		std::list<Transition<Chunk1>> base_transitions = base->getTransitions(c);
-		std::list<Transition<Chunk2>> res;
+		typename Containers<Transition<Chunk1>>::list base_transitions = base->getTransitions(c);
+		typename Containers<Transition<Chunk2>>::list res;
 		for( Transition<Chunk1> transition : base_transitions )
 		{
 			res.push_back(Transition<Chunk2>(create(transition.state, transformation), transition.prob));
@@ -572,14 +616,14 @@ public:
 	typedef typename ChunkState<Chunk>::TransitionT TransitionT;
 
 private:
-	std::list<Transition<ChunkT>> alternatives;
+	typename Containers<Transition<ChunkT>>::list alternatives;
 
-	AlternativesChunkState(const std::list<Transition<ChunkT>> alternatives)
+	AlternativesChunkState(const typename Containers<Transition<ChunkT>>::list alternatives)
 	: alternatives(alternatives)
 	{}
 
 public:
-	static Ptr create(const std::list<Transition<ChunkT>> alternatives)
+	static Ptr create(const typename Containers<Transition<ChunkT>>::list alternatives)
 	{
 		return Ptr(new AlternativesChunkState(alternatives));
 	}
@@ -604,16 +648,16 @@ public:
 		return res;
 	}
 
-	virtual const std::list<TransitionT> getTransitions(CharT c) const
+	virtual const typename Containers<TransitionT>::list getTransitions(CharT c) const
 	{
-		std::list<TransitionT> res;
+		typename Containers<TransitionT>::list res;
 		double total_prob = 0;
 		for( Transition<ChunkT> alternative : alternatives )
 		{
 			double prob = alternative.state->getProbability(c);
 			if( prob > 0 )
 			{
-				std::list<TransitionT> transitions = alternative.state->getTransitions(c);
+				typename Containers<TransitionT>::list transitions = alternative.state->getTransitions(c);
 				for( TransitionT transition : transitions )
 				{
 					res.push_back(transition * alternative.prob * prob);
@@ -621,16 +665,18 @@ public:
 				total_prob += prob;
 			}
 		}
-		for( Transition<ChunkT>& transition : res )
+
+		typename Containers<TransitionT>::list res_norm;
+		for( const Transition<ChunkT>& transition : res )
 		{
-			transition /= total_prob;
+			res_norm.push_back(transition / total_prob);
 		}
-		return res;
+		return res_norm;
 	}
 
 	virtual ChunkT finish() const
 	{
-		std::list<ChunkT> res;
+		typename Containers<ChunkT>::list res;
 		for( Transition<ChunkT> alternative : alternatives )
 		{
 			if( alternative.state->getProbabilityFinished() > 0 )
@@ -653,9 +699,10 @@ public:
 	}
 };
 
-template<typename ChunkT>
-typename ChunkState<ChunkT>::Ptr either(std::list<Transition<ChunkT>> alternatives)
+template<typename ListType>
+typename ChunkState<typename ListType::value_type::ChunkT>::Ptr either(/*Containers<Transition<ChunkT>>::list*/ ListType alternatives)
 {
+	typedef typename ListType::value_type::ChunkT ChunkT;
 	return AlternativesChunkState<ChunkT>::create(alternatives);
 }
 
@@ -671,7 +718,7 @@ namespace continuation_impl
 		typedef NextChunk NextChunkT;
 		typedef Transition<NextChunkT> TransitionT;
 
-		virtual const std::list<Transition<NextChunk>> next() const = 0;
+		virtual const typename Containers<Transition<NextChunk>>::list next() const = 0;
 
 		virtual double probabilityFinished() const
 		{
@@ -748,7 +795,7 @@ namespace continuation_impl
 			return 0;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const typename Containers<TransitionT>::list getTransitions(CharT c) const
 		{
 			return ContinuationHelper<LastChunk, CurChunk>::expandTransitions(base->getTransitions(c));
 		}
@@ -769,11 +816,11 @@ namespace continuation_impl
 	public:
 		static constexpr double negligible = 1e-5;
 
-		static const std::list<Transition<LastChunk>> expandTransitions(const std::list<Transition<CurChunk>> transitions)
+		static const typename Containers<Transition<LastChunk>>::list expandTransitions(const typename Containers<Transition<CurChunk>>::list transitions)
 		{
 			typedef typename CurChunk::NextChunkT NextChunk;
-			std::list<Transition<LastChunk>> res;
-			std::list<Transition<NextChunk>> next;
+			typename Containers<Transition<LastChunk>>::list res;
+			typename Containers<Transition<NextChunk>>::list next;
 			for( Transition<CurChunk> transition : transitions )
 			{
 				double prob_transition_finished = transition.state->getProbabilityFinished();
@@ -816,7 +863,7 @@ namespace continuation_impl
 	class ContinuationHelperImpl<LastChunk, LastChunk, false>
 	{
 	public:
-		static const std::list<Transition<LastChunk>> expandTransitions(const std::list<Transition<LastChunk>> transitions)
+		static const typename Containers<Transition<LastChunk>>::list expandTransitions(const typename Containers<Transition<LastChunk>>::list transitions)
 		{
 			return transitions;
 		}
@@ -842,19 +889,19 @@ namespace continuation_impl
 	class ContinuationHelper
 	{
 	public:
-		static const std::list<Transition<LastChunk>> expandTransitions(std::list<Transition<CurChunk>> transitions)
+		static const typename Containers<Transition<LastChunk>>::list expandTransitions(typename Containers<Transition<CurChunk>>::list transitions)
 		{
 			return ContinuationHelperImpl<LastChunk, CurChunk, IsTBC<CurChunk>::value>::expandTransitions(transitions);
 		}
 
-		static const std::list<Transition<LastChunk>> expandTransition(Transition<CurChunk> transition)
+		static const typename Containers<Transition<LastChunk>>::list expandTransition(Transition<CurChunk> transition)
 		{
-			std::list<Transition<CurChunk>> transition_list;
+			typename Containers<Transition<CurChunk>>::list transition_list;
 			transition_list.push_back(transition);
 			return expandTransitions(transition_list);
 		}
 
-		static const std::list<Transition<LastChunk>> expandState(typename ChunkState<CurChunk>::Ptr state)
+		static const typename Containers<Transition<LastChunk>>::list expandState(typename ChunkState<CurChunk>::Ptr state)
 		{
 			return expandTransition(Transition<CurChunk>(state, 1));
 		}
@@ -886,9 +933,9 @@ namespace tbc_helpers
 		: chunk(chunk)
 		{}
 
-		virtual const std::list<Transition<NextChunkT>> next() const
+		virtual const typename Containers<Transition<NextChunkT>>::list next() const
 		{
-			return std::list<Transition<NextChunkT>>();
+			return typename Containers<Transition<NextChunkT>>::list();
 		}
 
 		Chunk get() const
@@ -955,9 +1002,9 @@ public:
 		}
 	};
 
-	virtual const std::list<Transition<ResultChunk>> next() const
+	virtual const typename Containers<Transition<ResultChunk>>::list next() const
 	{
-		std::list<Transition<ResultChunk>> res;
+		typename Containers<Transition<ResultChunk>>::list res;
 		res.push_back(Transition<ResultChunk>(follower_generator(first_chunk), 1));
 		return res;
 	}
@@ -1002,11 +1049,11 @@ public:
 		}
 	};
 
-	virtual const std::list<Transition<Result>> next() const
+	virtual const typename Containers<Transition<Result>>::list next() const
 	{
 		typename ChunkState<Result>::Ptr res = transform<Result>(state2, chunk1);
 
-		std::list<Transition<Result>> res_list;
+		typename Containers<Transition<Result>>::list res_list;
 		res_list.push_back(Transition<Result>(res, 1.0));
 		return res_list;
 	}
@@ -1069,18 +1116,18 @@ namespace number_impl
 			return prob_finished;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
 			if( (c >= '0') && (c <= '9') )
 			{
-				std::list<TransitionT> res;
+				Containers<TransitionT>::list res;
 				res.push_back(TransitionT(create(prob_finished, prefix * 10 + (c - '0')), 1));
 				return res;
 			}
 			else
 			{
 				//throw std::logic_error(std::string("A call to APositiveInteger::getTransitions(") + c + ")");
-				return std::list<TransitionT>();
+				return Containers<TransitionT>::list();
 			}
 		}
 
@@ -1129,9 +1176,9 @@ namespace number_impl
 			return 0;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			if( (c >= '0') && (c <= '9') )
 			{
 				res.push_back(TransitionT(APositiveIntegerChunkState::create(probability_finished, c - '0'), 1));
@@ -1210,9 +1257,9 @@ namespace number_impl
 			return 0.25;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			if( c == '-' )
 			{
 				res.push_back(TransitionT(EmptyChunkState<SignChunk>::create(SignChunk(true)), 1));
@@ -1277,9 +1324,9 @@ namespace number_impl
 			return prob_finish;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			if( (c >= '0') && (c <= '9') )
 			{
 				res.push_back(TransitionT(create(value + order * (c - '0'), order / 10, prob_finish), 1));
@@ -1335,9 +1382,9 @@ namespace number_impl
 			return probability_int;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			if( c == '.' )
 			{
 				res.push_back(TransitionT(FloatingPartChunkState::create(integer_part), 1));
@@ -1402,9 +1449,9 @@ namespace number_impl
 			return 1 - probability_scientific;
 		}
 
-		virtual const std::list<TransitionT> getTransitions(CharT c) const
+		virtual const Containers<TransitionT>::list getTransitions(CharT c) const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			if( probability_scientific > 0 )
 			{
 				res.push_back(TransitionT(an_integer(), 1));
@@ -1450,9 +1497,9 @@ namespace number_impl
 			return base * std::pow(10, order);
 		}
 
-		virtual const std::list<TransitionT> next() const
+		virtual const Containers<TransitionT>::list next() const
 		{
-			std::list<TransitionT> res;
+			Containers<TransitionT>::list res;
 			res.push_back(TransitionT(transform<double>(ScientificPartState::create(probability_scientific), *this), 1));
 			return res;
 		}
@@ -1669,9 +1716,9 @@ namespace sequence_impl
 		: parsed_list(parsed_list), list(list)
 		{}
 
-		virtual const std::list<Transition<NextChunk>> next() const
+		virtual const typename Containers<Transition<NextChunk>>::list next() const
 		{
-			std::list<Transition<NextChunk>> res;
+			typename Containers<Transition<NextChunk>>::list res;
 			res.push_back(Transition<NextChunk>(transform<NextChunk>(list.head, *this), 1));
 			return res;
 		}
@@ -1694,9 +1741,9 @@ namespace sequence_impl
 		: parsed_list(parsed_list)
 		{}
 
-		virtual const std::list<Transition<NextChunk>> next() const
+		virtual const typename Containers<Transition<NextChunk>>::list next() const
 		{
-			std::list<Transition<NextChunk>> res;
+			typename Containers<Transition<NextChunk>>::list res;
 			return res;
 		}
 
@@ -1752,12 +1799,12 @@ public:
 
 private:
 	typename ChunkState<BaseChunk>::Ptr base_element;
-	std::list<BaseChunk> data;
+	typename Containers<BaseChunk>::list data;
 	int min_length;
 	int max_length;
 
 public:
-	StarChunk(typename ChunkState<BaseChunk>::Ptr start_state, int min_length, int max_length, std::list<BaseChunk> data)
+	StarChunk(typename ChunkState<BaseChunk>::Ptr start_state, int min_length, int max_length, typename Containers<BaseChunk>::list data)
 	: base_element(start_state), data(data), min_length(min_length), max_length(max_length)
 	{}
 
@@ -1770,14 +1817,14 @@ public:
 	 */
 	StarChunk<BaseChunk> operator() (BaseChunk element) const
 	{
-		std::list<BaseChunk> next_data = data;
+		typename Containers<BaseChunk>::list next_data = data;
 		next_data.push_back(element);
 		return StarChunk<BaseChunk>(base_element, min_length, max_length, next_data);
 	}
 
-	virtual const std::list<TransitionT> next() const
+	virtual const typename Containers<TransitionT>::list next() const
 	{
-		std::list<TransitionT> res;
+		typename Containers<TransitionT>::list res;
 		double prob;
 		if( data.size() < min_length )
 		{
@@ -1798,27 +1845,27 @@ public:
 		return res;
 	}
 
-	static std::list<BaseChunk> unwrap(const StarChunk<BaseChunk>& star)
+	static typename Containers<BaseChunk>::list unwrap(const StarChunk<BaseChunk>& star)
 	{
 		return star.data;
 	}
 };
 
 template<typename ChunkStateT>
-typename ChunkState<std::list<typename ChunkStateT::ChunkT>>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, std::list<typename ChunkStateT::ChunkT> initial_part)
+typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, typename Containers<typename ChunkStateT::ChunkT>::list initial_part)
 {
 	typedef typename ChunkStateT::ChunkT BaseChunk;
 	typedef StarChunk<BaseChunk> StarChunkT;
-	typedef std::list<BaseChunk> ResultT;
+	typedef typename Containers<BaseChunk>::list ResultT;
 	auto wrapper = StarChunkT(element, min_length, max_length, initial_part);
 	auto unwrapper = StarChunkT::unwrap;
 	return transform<ResultT>(continuation<StarChunkT>(transform<StarChunkT>(element, wrapper)), unwrapper);
 }
 
 template<typename ChunkStateT>
-typename ChunkState<std::list<typename ChunkStateT::ChunkT>>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length)
+typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length)
 {
-	return star(element, min_length, max_length, std::list<typename ChunkStateT::ChunkT>());
+	return star(element, min_length, max_length, typename Containers<typename ChunkStateT::ChunkT>::list());
 }
 
 #endif
