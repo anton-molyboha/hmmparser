@@ -197,6 +197,24 @@ ChunkState<Void>::Ptr whitespace();
 ChunkState<std::string>::Ptr literal(std::string value);
 
 /**
+ * A ChunkState which generates a non-negative decimal integer
+ */
+ChunkState<int>::Ptr a_positive_integer();
+
+/**
+ * A ChunkState which generates a decimal integer
+ */
+ChunkState<int>::Ptr an_integer();
+
+/**
+ * A ChunkState which generates a decimal integer or fraction
+ *
+ * @param dot_is_optional if false, the decimal dot must be present, e.g. "15." is ok, but "15" is not
+ * @param probability_scientific if positive, scientific notation is allowed, e.g. "5.3e+3"
+ */
+ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional, double probability_scientific);
+
+/**
  * A ChunkState which generates the same text as a given other ChunkState, but applies a transformation (function)
  * to the generator Chunk
  */
@@ -209,7 +227,240 @@ typename ChunkState<Chunk2>::Ptr transform(std::shared_ptr<ChunkStateT1> state, 
 template<typename ListType>
 typename ChunkState<typename ListType::value_type::ChunkT>::Ptr either(/*Containers<Transition<ChunkT>>::list*/ ListType alternatives);
 
-// Impelementation of Transition
+// Continuation API
+
+/**
+ * A chunk type which knows what kind of chunk to read next
+ *
+ * (TBC stands for "to be continued")
+ */
+template<typename NextChunk>
+class ChunkTBC
+{
+public:
+    typedef NextChunk NextChunkT;
+    typedef Transition<NextChunkT> TransitionT;
+
+    virtual const typename Containers<Transition<NextChunk>>::list next() const = 0;
+
+    virtual double probabilityFinished() const;
+};
+
+/**
+ * Given a ChunkState whose Chunk is an instance of ChunkTBC, creates a ChunkState which generates
+ * this chunk followed by any continuations.
+ *
+ * The resultant chunk is expected to be of type LastChunk; it is a runtime error if the given ChunkTBC
+ * with its continuations has a positive probability to generate a chunk of a different type.
+ */
+template<typename LastChunk, typename FirstChunkState>
+typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state);
+
+/**
+ * Combines a ChunkState that generates a first chunk, and a functor which maps the first chunk into a
+ * ChunkState to read the rest and return the ResultChunk
+ */
+template<typename ResultChunk, typename FirstChunkState, typename Functor>
+typename ChunkState<ResultChunk>::Ptr follow(std::shared_ptr<FirstChunkState> first_state, Functor follower_generator);
+
+/**
+ * A sequence of two chunks where the result is the application of chunk1 (which should be a functor) to chunk2
+ */
+template<typename Result, typename ChunkState1, typename ChunkState2>
+typename ChunkState<Result>::Ptr applyFirstToSecond(std::shared_ptr<ChunkState1> state1, std::shared_ptr<ChunkState2> state2);
+
+// List template
+namespace list_template
+{
+    /**
+     * A fixed-length sequence of elements of different types
+     */
+    template<typename Head, typename Tail>
+    class ListT;
+
+    class Nil
+    {
+    public:
+        template<typename T>
+        class With
+        {
+        public:
+            typedef ListT<T, Nil> Type;
+        };
+
+        template<typename Type>
+        ListT<Type, Nil> then(Type value) const;
+    };
+
+    namespace impl
+    {
+        template<typename List, int index>
+        class ListT_Getter;
+
+        template<typename List, typename Type>
+        class ListT_Builder;
+    }
+
+    template<typename Head, typename Tail>
+    class ListT
+    {
+    public:
+        typedef Head HeadT;
+        typedef Tail TailT;
+        typedef ListT<HeadT, TailT> SelfT;
+
+        HeadT head;
+        TailT tail;
+
+        ListT(Head head, Tail tail)
+        : head(head), tail(tail)
+        {}
+
+        template<int index>
+        typename impl::ListT_Getter<SelfT, index>::TypeAt at() const;
+
+        template<typename T>
+        class With
+        {
+        public:
+            typedef typename impl::ListT_Builder<SelfT, T>::ResType Type;
+        };
+
+        template<typename Type>
+        typename With<Type>::Type then(Type value) const;
+    };
+
+    template<typename Head, typename Tail>
+    ListT<Head, Tail> make_listT(Head head, Tail tail)
+    {
+        return ListT<Head, Tail>(head, tail);
+    }
+
+    template<typename Type>
+    ListT<Type, Nil> listT(Type value)
+    {
+        return make_listT(value, Nil());
+    }
+
+    namespace impl
+    {
+        template<typename List, int index>
+        class ListT_Getter
+        {
+        public:
+            typedef typename ListT_Getter<typename List::TailT, index-1>::TypeAt TypeAt;
+            static TypeAt get(const List& self)
+            {
+                return ListT_Getter<typename List::TailT, index-1>::get(self.tail);
+            }
+        };
+
+        template<typename List>
+        class ListT_Getter<List, 0>
+        {
+        public:
+            typedef typename List::HeadT TypeAt;
+            static TypeAt get(const List& self)
+            {
+                return self.head;
+            }
+        };
+
+        template<typename List, typename Type>
+        class ListT_Builder
+        {
+        public:
+            typedef ListT<typename List::HeadT, typename ListT_Builder<typename List::TailT, Type>::ResType> ResType;
+            static ResType then(const List& list, Type value)
+            {
+                return make_listT(list.head, ListT_Builder<typename List::TailT, Type>::then(list.tail, value));
+            }
+        };
+
+        template<typename Type>
+        class ListT_Builder<Nil, Type>
+        {
+        public:
+            typedef ListT<Type, Nil> ResType;
+            static ResType then(const Nil& list, Type value)
+            {
+                return make_listT(value, Nil());
+            }
+        };
+    }
+
+    template<typename Head, typename Tail>
+    template<int index>
+    typename impl::ListT_Getter<ListT<Head, Tail>, index>::TypeAt ListT<Head, Tail>::at() const
+    {
+        return impl::ListT_Getter<ListT<Head, Tail>, index>::get(*this);
+    }
+
+    template<typename Type>
+    ListT<Type, Nil> Nil::then(Type value) const
+    {
+        return listT(value);
+    }
+
+    template<typename Head, typename Tail>
+    template<typename Type>
+    typename ListT<Head, Tail>::template With<Type>::Type ListT<Head, Tail>::then(Type value) const
+    {
+        return impl::ListT_Builder<ListT<Head, Tail>, Type>::then(*this, value);
+    }
+}
+
+using list_template::ListT;
+using list_template::Nil;
+using list_template::listT;
+using list_template::make_listT;
+
+namespace sequence_impl
+{
+    template<typename StatePtr>
+    class StateToChunkConverter;
+
+    template<typename StateList>
+    class StatesToChunksConverter;
+}
+
+/**
+ * A ChunkState which generates a sequence of chunks given by a ListT of their initial states. The generator Chunk is a ListT of the individual chunks.
+ */
+template<typename StateList>
+typename ChunkState<typename sequence_impl::StatesToChunksConverter<StateList>::Chunks>::Ptr sequence(StateList states);
+
+/**
+ * A ChunkState which generates a sequence of chunks given by a ListT of their initial states. The generator Chunk is the index'th generated chunk.
+ */
+template<int index, typename List>
+typename ChunkState<typename sequence_impl::StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
+one_in_sequence(List list);
+
+/**
+ * A ChunkState which generates multiple repetitions of a given chunk.
+ *
+ * @param element The initial ChunkState for the chunk to be repeated.
+ * @param min_length the minimal number of repetitions, zero or more.
+ * @param max_length the maximal number of repetitions, or -1 if the number is unbounded.
+ * @param initial_part will be prepended to the final Chunk
+ */
+template<typename ChunkStateT>
+typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr
+star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, typename Containers<typename ChunkStateT::ChunkT>::list initial_part);
+
+/**
+ * A ChunkState which generates multiple repetitions of a given chunk.
+ *
+ * @param element The initial ChunkState for the chunk to be repeated.
+ * @param min_length the minimal number of repetitions, zero or more.
+ * @param max_length the maximal number of repetitions, or -1 if the number is unbounded.
+ */
+template<typename ChunkStateT>
+typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length);
+
+// Implementation of Transition
+
 template<typename Chunk>
 Transition<Chunk>::Transition(typename ChunkState<ChunkT>::Ptr state, double prob)
 :state(state), prob(prob)
@@ -879,33 +1130,21 @@ typename ChunkState<typename ListType::value_type::ChunkT>::Ptr either(/*Contain
     return AlternativesChunkState<ChunkT>::create(alternatives);
 }
 
+// Continuation API implementation
+
+template<typename NextChunk>
+double ChunkTBC<NextChunk>::probabilityFinished() const
+{
+    double res = 1;
+    for( auto transition : next() )
+    {
+        res -= transition.prob;
+    }
+    return res;
+}
+
 namespace continuation_impl
 {
-    /**
-     * A chunk type which knows what kind of chunk to read next
-     *
-     * (TBC stands for "to be continued")
-     */
-    template<typename NextChunk>
-    class ChunkTBC
-    {
-    public:
-        typedef NextChunk NextChunkT;
-        typedef Transition<NextChunkT> TransitionT;
-
-        virtual const typename Containers<Transition<NextChunk>>::list next() const = 0;
-
-        virtual double probabilityFinished() const
-        {
-            double res = 1;
-            for( auto transition : next() )
-            {
-                res -= transition.prob;
-            }
-            return res;
-        }
-    };
-
     template<typename ToType, typename FromType>
     class TypeCheckHelper
     {
@@ -1081,18 +1320,16 @@ namespace continuation_impl
             return expandTransition(Transition<CurChunk>(state, 1));
         }
     };
-
-    template<typename LastChunk, typename FirstChunkState>
-    typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state)
-    {
-        typedef typename FirstChunkState::ChunkT FirstChunk;
-        return AlternativesChunkState<LastChunk>::create(ContinuationHelper<LastChunk, FirstChunk>::expandState(start_state));
-    }
 }
 
-using continuation_impl::ChunkTBC;
-using continuation_impl::continuation;
+template<typename LastChunk, typename FirstChunkState>
+typename ChunkState<LastChunk>::Ptr continuation(std::shared_ptr<FirstChunkState> start_state)
+{
+    typedef typename FirstChunkState::ChunkT FirstChunk;
+    return AlternativesChunkState<LastChunk>::create(continuation_impl::ContinuationHelper<LastChunk, FirstChunk>::expandState(start_state));
+}
 
+// This is deprecated: we can now use non-TBC chunks as last chunks in continuations
 namespace tbc_helpers
 {
     template<typename Chunk>
@@ -1367,11 +1604,6 @@ namespace number_impl
         }
     };
 
-    ChunkState<int>::Ptr a_positive_integer()
-    {
-        return APositiveIntegerFirstChunkState::create();
-    }
-
     class SignChunk
     {
     private:
@@ -1451,11 +1683,6 @@ namespace number_impl
             return SignChunk(false);
         }
     };
-
-    ChunkState<int>::Ptr an_integer()
-    {
-        return applyFirstToSecond<int>(SignChunkState::create(), a_positive_integer());
-    }
 
     class FloatingPartChunkState: public ChunkState<double>
     {
@@ -1679,164 +1906,31 @@ namespace number_impl
             return res;
         }
     };
-
-    ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional, double probability_scientific)
-    {
-        //ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
-        ChunkState<double>::Ptr positive_number = follow<double>(a_positive_integer(), FloatGenerator(dot_is_optional));
-        ChunkState<double>::Ptr positive_number_scientific = continuation<double>(transform<WantScientificPart>(positive_number, WantScientificPart::Builder(probability_scientific)));
-        return applyFirstToSecond<double>(SignChunkState::create(), positive_number_scientific);
-    }
 }
 
-using number_impl::a_positive_integer;
-using number_impl::an_integer;
-using number_impl::a_floating_point_number;
+ChunkState<int>::Ptr a_positive_integer()
+{
+    return number_impl::APositiveIntegerFirstChunkState::create();
+}
+
+ChunkState<int>::Ptr an_integer()
+{
+    return applyFirstToSecond<int>(number_impl::SignChunkState::create(), a_positive_integer());
+}
+
+ChunkState<double>::Ptr a_floating_point_number(bool dot_is_optional, double probability_scientific)
+{
+    //ChunkState<double>::Ptr positive_number = continuation<double>(transform<FirstChunkOfFloat>(a_positive_integer(), FirstChunkOfFloat::Builder(dot_is_optional)));
+    ChunkState<double>::Ptr positive_number = follow<double>(a_positive_integer(), number_impl::FloatGenerator(dot_is_optional));
+    ChunkState<double>::Ptr positive_number_scientific = continuation<double>(transform<number_impl::WantScientificPart>(
+        positive_number,
+        number_impl::WantScientificPart::Builder(probability_scientific)
+    ));
+    return applyFirstToSecond<double>(number_impl::SignChunkState::create(), positive_number_scientific);
+}
 
 //////
-// List template
-
-namespace list_template
-{
-    template<typename Head, typename Tail>
-    class ListT;
-
-    class Nil
-    {
-    public:
-        template<typename T>
-        class With
-        {
-        public:
-            typedef ListT<T, Nil> Type;
-        };
-
-        template<typename Type>
-        ListT<Type, Nil> then(Type value) const;
-    };
-
-    namespace impl
-    {
-        template<typename List, int index>
-        class ListT_Getter;
-
-        template<typename List, typename Type>
-        class ListT_Builder;
-    }
-
-    template<typename Head, typename Tail>
-    class ListT
-    {
-    public:
-        typedef Head HeadT;
-        typedef Tail TailT;
-        typedef ListT<HeadT, TailT> SelfT;
-
-        HeadT head;
-        TailT tail;
-
-        ListT(Head head, Tail tail)
-        : head(head), tail(tail)
-        {}
-
-        template<int index>
-        typename impl::ListT_Getter<SelfT, index>::TypeAt at() const;
-
-        template<typename T>
-        class With
-        {
-        public:
-            typedef typename impl::ListT_Builder<SelfT, T>::ResType Type;
-        };
-
-        template<typename Type>
-        typename With<Type>::Type then(Type value) const;
-    };
-
-    template<typename Head, typename Tail>
-    ListT<Head, Tail> make_listT(Head head, Tail tail)
-    {
-        return ListT<Head, Tail>(head, tail);
-    }
-
-    template<typename Type>
-    ListT<Type, Nil> listT(Type value)
-    {
-        return make_listT(value, Nil());
-    }
-
-    namespace impl
-    {
-        template<typename List, int index>
-        class ListT_Getter
-        {
-        public:
-            typedef typename ListT_Getter<typename List::TailT, index-1>::TypeAt TypeAt;
-            static TypeAt get(const List& self)
-            {
-                return ListT_Getter<typename List::TailT, index-1>::get(self.tail);
-            }
-        };
-
-        template<typename List>
-        class ListT_Getter<List, 0>
-        {
-        public:
-            typedef typename List::HeadT TypeAt;
-            static TypeAt get(const List& self)
-            {
-                return self.head;
-            }
-        };
-
-        template<typename List, typename Type>
-        class ListT_Builder
-        {
-        public:
-            typedef ListT<typename List::HeadT, typename ListT_Builder<typename List::TailT, Type>::ResType> ResType;
-            static ResType then(const List& list, Type value)
-            {
-                return make_listT(list.head, ListT_Builder<typename List::TailT, Type>::then(list.tail, value));
-            }
-        };
-
-        template<typename Type>
-        class ListT_Builder<Nil, Type>
-        {
-        public:
-            typedef ListT<Type, Nil> ResType;
-            static ResType then(const Nil& list, Type value)
-            {
-                return make_listT(value, Nil());
-            }
-        };
-    }
-
-    template<typename Head, typename Tail>
-    template<int index>
-    typename impl::ListT_Getter<ListT<Head, Tail>, index>::TypeAt ListT<Head, Tail>::at() const
-    {
-        return impl::ListT_Getter<ListT<Head, Tail>, index>::get(*this);
-    }
-
-    template<typename Type>
-    ListT<Type, Nil> Nil::then(Type value) const
-    {
-        return listT(value);
-    }
-
-    template<typename Head, typename Tail>
-    template<typename Type>
-    typename ListT<Head, Tail>::template With<Type>::Type ListT<Head, Tail>::then(Type value) const
-    {
-        return impl::ListT_Builder<ListT<Head, Tail>, Type>::then(*this, value);
-    }
-}
-
-using list_template::ListT;
-using list_template::Nil;
-using list_template::listT;
-using list_template::make_listT;
+// Implementation of sequence of chunks
 
 namespace sequence_impl
 {
@@ -1934,36 +2028,36 @@ namespace sequence_impl
         return chunk.get_parsed();
     }
 
-    template<typename StateList>
-    typename ChunkState<typename StatesToChunksConverter<StateList>::Chunks>::Ptr sequence(StateList states)
-    {
-        typedef typename StatesToChunksConverter<StateList>::Chunks ParsedList;
-        typedef ListChunk<ParsedList, Nil> LastChunk;
-        typedef ListChunk<Nil, StateList> FirstChunk;
-
-        typename ChunkState<LastChunk>::Ptr res = continuation<LastChunk>(transform<typename FirstChunk::NextChunkT>(states.head, FirstChunk(Nil(), states)));
-        return transform<ParsedList>(res, extractor<ParsedList>);
-    }
-
     template<int index, typename List>
     typename list_template::impl::ListT_Getter<List, index>::TypeAt take_one(List list)
     {
         return list.template at<index>();
     }
-
-    template<int index, typename List>
-    typename ChunkState<typename StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
-    one_in_sequence(List list)
-    {
-        typedef
-            typename ChunkState<typename StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
-            ResultT;
-        return transform<typename sequence_impl::StateToChunkConverter<ResultT>::ChunkT>(sequence(list), take_one<index, typename StatesToChunksConverter<List>::Chunks>);
-    }
 }
 
-using sequence_impl::sequence;
-using sequence_impl::one_in_sequence;
+template<typename StateList>
+typename ChunkState<typename sequence_impl::StatesToChunksConverter<StateList>::Chunks>::Ptr sequence(StateList states)
+{
+    typedef typename sequence_impl::StatesToChunksConverter<StateList>::Chunks ParsedList;
+    typedef sequence_impl::ListChunk<ParsedList, Nil> LastChunk;
+    typedef sequence_impl::ListChunk<Nil, StateList> FirstChunk;
+
+    typename ChunkState<LastChunk>::Ptr res = continuation<LastChunk>(transform<typename FirstChunk::NextChunkT>(states.head, FirstChunk(Nil(), states)));
+    return transform<ParsedList>(res, sequence_impl::extractor<ParsedList>);
+}
+
+template<int index, typename List>
+typename ChunkState<typename sequence_impl::StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
+one_in_sequence(List list)
+{
+    typedef
+        typename ChunkState<typename sequence_impl::StateToChunkConverter<typename list_template::impl::ListT_Getter<List, index>::TypeAt>::ChunkT>::Ptr
+        ResultT;
+    return transform<typename sequence_impl::StateToChunkConverter<ResultT>::ChunkT>(
+        sequence(list),
+        sequence_impl::take_one<index, typename sequence_impl::StatesToChunksConverter<List>::Chunks>
+    );
+}
 
 template<typename BaseChunk>
 class StarChunk: public ChunkTBC<StarChunk<BaseChunk>>
@@ -2027,7 +2121,8 @@ public:
 };
 
 template<typename ChunkStateT>
-typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, typename Containers<typename ChunkStateT::ChunkT>::list initial_part)
+typename ChunkState<typename Containers<typename ChunkStateT::ChunkT>::list>::Ptr
+star(std::shared_ptr<ChunkStateT> element, int min_length, int max_length, typename Containers<typename ChunkStateT::ChunkT>::list initial_part)
 {
     typedef typename ChunkStateT::ChunkT BaseChunk;
     typedef StarChunk<BaseChunk> StarChunkT;
