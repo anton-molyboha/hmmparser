@@ -7,6 +7,9 @@
 #include <cmath>
 #include "list2.h"
 
+/**
+ * typedef-only class template which selects which implementation of list and smart pointer to use throughout the code.
+ */
 template<typename T>
 class Containers
 {
@@ -21,6 +24,9 @@ struct Transition;
 template<typename Chunk>
 class ChunkState;
 
+/**
+ * The hidden state of the imaginary Markov process generating the text we are looking at.
+ */
 template<typename Chunk>
 class ChunkState
 {
@@ -60,6 +66,9 @@ public:
     virtual ~ChunkState() {}
 };
 
+/**
+ * A structure that couples a ChunkState with the probability of being in that state.
+ */
 template<typename Chunk>
 struct Transition
 {
@@ -68,39 +77,40 @@ struct Transition
     typename ChunkState<ChunkT>::Ptr state;
     double prob;
 
-    Transition(typename ChunkState<ChunkT>::Ptr state, double prob)
-    :state(state), prob(prob)
-    {}
+    Transition(typename ChunkState<ChunkT>::Ptr state, double prob);
 
-    Transition<Chunk> operator* (double prob_multiplier) const
-    {
-        return Transition<Chunk>(state, prob * prob_multiplier);
-    }
+    /**
+     * Multiply the probability of this Transition by a coefficient
+     */
+    Transition<Chunk> operator * (double prob_multiplier) const;
 
-    Transition<Chunk> operator/ (double prob_multiplier) const
-    {
-        return Transition<Chunk>(state, prob / prob_multiplier);
-    }
+    /**
+     * Divide the probability of this Transition by a coefficient
+     */
+    Transition<Chunk> operator / (double prob_multiplier) const;
 
-    Transition<Chunk>& operator *= (double prob_multiplier)
-    {
-        prob *= prob_multiplier;
-        return *this;
-    }
+    /**
+     * Multiply the probability of this Transition by a coefficient
+     */
+    Transition<Chunk>& operator *= (double prob_multiplier);
 
-    Transition<Chunk>& operator /= (double prob_multiplier)
-    {
-        prob /= prob_multiplier;
-        return *this;
-    }
+    /**
+     * Divide the probability of this Transition by a coefficient
+     */
+    Transition<Chunk>& operator /= (double prob_multiplier);
 
+    /**
+     * Create a Transition with the same probability but a different ChunkState
+     *
+     * This is usually used when the state gets transformed in some way.
+     */
     template<typename ChunkStateT>
-    Transition<typename ChunkStateT::ChunkT> with_state(std::shared_ptr<ChunkStateT> other_state)
-    {
-        return Transition<typename ChunkStateT::ChunkT>(other_state, prob);
-    }
+    Transition<typename ChunkStateT::ChunkT> with_state(std::shared_ptr<ChunkStateT> other_state) const;
 };
 
+/**
+ * Process a text character-by-character and decide which Chunk most likely has generated it.
+ */
 template<typename Chunk>
 class Parser
 {
@@ -113,82 +123,212 @@ private:
     typename Containers<TransitionT>::list states;
 
 public:
-    Parser(typename Containers<TransitionT>::list initial_states)
-    : states(initial_states)
-    {}
+    /**
+     * Construct a Parser from the initial set of states with their probabilities
+     */
+    Parser(typename Containers<TransitionT>::list initial_states);
 
-    Parser(typename ChunkStateT::Ptr initial_state)
-    : states{TransitionT(initial_state, 1)}
-    {}
+    /**
+     * Construct a Parser with a given initial state
+     */
+    Parser(typename ChunkStateT::Ptr initial_state);
 
-    void next_char(char chr)
-    {
-        typename Containers<TransitionT>::list next;
-        for( auto it = states.begin(); it != states.end(); ++it )
-        {
-            double prob = it->prob * it->state->getProbability(chr);
-            if( prob > 0 )
-            {
-                typename Containers<TransitionT>::list trans = it->state->getTransitions(chr);
-                for( auto it2 = trans.begin(); it2 != trans.end(); ++it2 )
-                {
-                    next.push_back(TransitionT(it2->state, it2->prob * prob));
-                }
-            }
-        }
+    /**
+     * Process the next character of the text
+     */
+    void next_char(char chr);
 
-        double totalProb = 0;
-        for( auto it = next.begin(); it != next.end(); ++it )
-        {
-            totalProb += it->prob;
-        }
+    /**
+     * Process the end-of-text and return the chunk which has most likely generated the whole text
+     */
+    Chunk finish();
 
-        states.clear();
-        for( auto it = next.begin(); it != next.end(); ++it )
-        {
-            states.push_back(*it / totalProb);
-        }
-    }
-
-    Chunk finish()
-    {
-        typename Containers<TransitionT>::list next;
-
-        for( auto it = states.begin(); it != states.end(); ++it )
-        {
-            double prob = it->prob * it->state->getProbabilityFinished();
-            if( prob > 0 )
-            {
-                next.push_back(TransitionT(it->state, it->prob * prob));
-            }
-        }
-
-        if( next.empty() )
-        {
-            throw std::runtime_error("Syntax error (could not parse)");
-        }
-        else
-        {
-            double maxProb = next.front().prob;
-            typename ChunkStateT::Ptr res = next.front().state;
-            for( auto it = next.begin(); it != next.end(); ++it )
-            {
-                if( it->prob > maxProb )
-                {
-                    maxProb = it->prob;
-                    res = it->state;
-                }
-            }
-
-            return res->finish();
-        }
-    }
-
-    typename Containers<TransitionT>::list get_states()
-    {
-        return states;
-    }
+    /**
+     * Return the list of states and their posterior probabilities
+     */
+    typename Containers<TransitionT>::list get_states();
 };
+
+/**
+ * Parse an input stream starting with a given state
+ */
+template<typename StartingChunkStateT>
+typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<StartingChunkStateT> state);
+
+// Basic chunks
+
+class Void
+{};
+
+/**
+ * A ChunkState which generates an empty string and returns the given chunk as the generating Chunk
+ */
+template<typename Chunk>
+typename ChunkState<Chunk>::Ptr empty_chunk(Chunk chunk);
+
+/**
+ * A ChunkState which generates an arbitrary character and returns that character as the generating Chunk
+ */
+ChunkState<char>::Ptr a_character();
+
+/**
+ * A ChunkState which generates a sequence of random characters of random length; returns Void as the generating Chunk
+ */
+ChunkState<Void>::Ptr garbage(double probability_finish);
+
+/**
+ * A ChunkState which generates a sequence of random characters of random length; returns Void as the generating Chunk
+ */
+ChunkState<Void>::Ptr garbage();
+
+/**
+ * Generates variable-length sequence of white-space characters; returns Void as the generating Chunk
+ */
+ChunkState<Void>::Ptr whitespace(double probability_finish);
+
+/**
+ * Generates variable-length sequence of white-space characters; returns Void as the generating Chunk
+ */
+ChunkState<Void>::Ptr whitespace();
+
+/**
+ * A ChunkState which generates a fixed string, and returns that string as the generating Chunk
+ */
+ChunkState<std::string>::Ptr literal(std::string value);
+
+/**
+ * A ChunkState which generates the same text as a given other ChunkState, but applies a transformation (function)
+ * to the generator Chunk
+ */
+template<typename Chunk2, typename ChunkStateT1, typename Transformation>
+typename ChunkState<Chunk2>::Ptr transform(std::shared_ptr<ChunkStateT1> state, Transformation transformation);
+
+/**
+ * A ChunkState which generates one out of a list of chunks, given by their initial ChunkState's
+ */
+template<typename ListType>
+typename ChunkState<typename ListType::value_type::ChunkT>::Ptr either(/*Containers<Transition<ChunkT>>::list*/ ListType alternatives);
+
+// Impelementation of Transition
+template<typename Chunk>
+Transition<Chunk>::Transition(typename ChunkState<ChunkT>::Ptr state, double prob)
+:state(state), prob(prob)
+{}
+
+template<typename Chunk>
+Transition<Chunk> Transition<Chunk>::operator * (double prob_multiplier) const
+{
+    return Transition<Chunk>(state, prob * prob_multiplier);
+}
+
+template<typename Chunk>
+Transition<Chunk> Transition<Chunk>::operator / (double prob_multiplier) const
+{
+    return Transition<Chunk>(state, prob / prob_multiplier);
+}
+
+template<typename Chunk>
+Transition<Chunk>& Transition<Chunk>::operator *= (double prob_multiplier)
+{
+    prob *= prob_multiplier;
+    return *this;
+}
+
+template<typename Chunk>
+Transition<Chunk>& Transition<Chunk>::operator /= (double prob_multiplier)
+{
+    prob /= prob_multiplier;
+    return *this;
+}
+
+template<typename Chunk>
+template<typename ChunkStateT>
+Transition<typename ChunkStateT::ChunkT> Transition<Chunk>::with_state(std::shared_ptr<ChunkStateT> other_state) const
+{
+    return Transition<typename ChunkStateT::ChunkT>(other_state, prob);
+}
+
+// Parser implementation
+template<typename Chunk>
+Parser<Chunk>::Parser(typename Containers<TransitionT>::list initial_states)
+: states(initial_states)
+{}
+
+template<typename Chunk>
+Parser<Chunk>::Parser(typename ChunkStateT::Ptr initial_state)
+: states{TransitionT(initial_state, 1)}
+{}
+
+template<typename Chunk>
+void Parser<Chunk>::next_char(char chr)
+{
+    typename Containers<TransitionT>::list next;
+    for( auto it = states.begin(); it != states.end(); ++it )
+    {
+        double prob = it->prob * it->state->getProbability(chr);
+        if( prob > 0 )
+        {
+            typename Containers<TransitionT>::list trans = it->state->getTransitions(chr);
+            for( auto it2 = trans.begin(); it2 != trans.end(); ++it2 )
+            {
+                next.push_back(TransitionT(it2->state, it2->prob * prob));
+            }
+        }
+    }
+
+    double totalProb = 0;
+    for( auto it = next.begin(); it != next.end(); ++it )
+    {
+        totalProb += it->prob;
+    }
+
+    states.clear();
+    for( auto it = next.begin(); it != next.end(); ++it )
+    {
+        states.push_back(*it / totalProb);
+    }
+}
+
+template<typename Chunk>
+Chunk Parser<Chunk>::finish()
+{
+    typename Containers<TransitionT>::list next;
+
+    for( auto it = states.begin(); it != states.end(); ++it )
+    {
+        double prob = it->prob * it->state->getProbabilityFinished();
+        if( prob > 0 )
+        {
+            next.push_back(TransitionT(it->state, it->prob * prob));
+        }
+    }
+
+    if( next.empty() )
+    {
+        throw std::runtime_error("Syntax error (could not parse)");
+    }
+    else
+    {
+        double maxProb = next.front().prob;
+        typename ChunkStateT::Ptr res = next.front().state;
+        for( auto it = next.begin(); it != next.end(); ++it )
+        {
+            if( it->prob > maxProb )
+            {
+                maxProb = it->prob;
+                res = it->state;
+            }
+        }
+
+        return res->finish();
+    }
+}
+
+template<typename Chunk>
+typename Containers<typename Parser<Chunk>::TransitionT>::list Parser<Chunk>::get_states()
+{
+    return states;
+}
 
 template<typename StartingChunkStateT>
 typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<StartingChunkStateT> state)
@@ -214,6 +354,9 @@ typename StartingChunkStateT::ChunkT parse(std::istream& strm, std::shared_ptr<S
 //////
 // Basic chunks
 
+/**
+ * A ChunkState which generates an empty string and returns a Chunk given to it at construction
+ */
 template<typename Chunk>
 class EmptyChunkState: public ChunkState<Chunk>, public std::enable_shared_from_this<EmptyChunkState<Chunk>>
 {
@@ -258,6 +401,15 @@ public:
     }
 };
 
+template<typename Chunk>
+typename ChunkState<Chunk>::Ptr empty_chunk(Chunk chunk)
+{
+    return EmptyChunkState<Chunk>::create(chunk);
+}
+
+/**
+ * A ChunkState which generates an arbitrary character and returns that character as the generating Chunk
+ */
 class SingleCharChunkState: public ChunkState<char>, public std::enable_shared_from_this<SingleCharChunkState>
 {
 public:
@@ -296,9 +448,14 @@ public:
     }
 };
 
-class Void
-{};
+ChunkState<char>::Ptr a_character()
+{
+    return SingleCharChunkState::create();
+};
 
+/**
+ * Generates a sequence of random characters of random length; returns Void as the generating Chunk
+ */
 class GarbageChunkState: public ChunkState<Void>
 {
 public:
@@ -360,6 +517,9 @@ int num_whitespace()
     return 2;
 }
 
+/**
+ * Generates variable-length sequence of white-space characters; returns Void as the generating Chunk
+ */
 class WhitespaceChunkState: public ChunkState<Void>
 {
 public:
@@ -411,6 +571,9 @@ public:
     }
 };
 
+/**
+ * Generates variable-length sequence of white-space characters; returns Void as the generating Chunk
+ */
 class WhitespaceChunkFirstState: public ChunkState<Void>
 {
 public:
@@ -469,6 +632,9 @@ ChunkState<Void>::Ptr whitespace()
     return whitespace(0.1);
 }
 
+/**
+ * A ChunkState which generates a fixed string, and returns that string as the generating Chunk
+ */
 class LiteralChunkState: public ChunkState<std::string>
 {
 public:
@@ -553,6 +719,10 @@ ChunkState<std::string>::Ptr literal(std::string value)
 //////
 // Compositions of chunks
 
+/**
+ * A ChunkState which generates the same text as a given other ChunkState, but applies a transformation (function)
+ * to the generator Chunk
+ */
 template<typename Chunk1, typename Chunk2, typename Transformation>
 class TransformedChunkState: public ChunkState<Chunk2>, public std::enable_shared_from_this<TransformedChunkState<Chunk1, Chunk2, Transformation>>
 {
@@ -606,6 +776,9 @@ typename ChunkState<Chunk2>::Ptr transform(std::shared_ptr<ChunkStateT1> state, 
     return TransformedChunkState<typename ChunkStateT1::ChunkT, Chunk2, Transformation>::create(state, transformation);
 }
 
+/**
+ * A ChunkState which generates one out of a list of chunks, given by their initial ChunkState's
+ */
 template<typename Chunk>
 class AlternativesChunkState: public ChunkState<Chunk>
 {
@@ -710,9 +883,11 @@ namespace continuation_impl
 {
     /**
      * A chunk type which knows what kind of chunk to read next
+     *
+     * (TBC stands for "to be continued")
      */
     template<typename NextChunk>
-    class ChunkTBC    // TBC stands for "to be continued"
+    class ChunkTBC
     {
     public:
         typedef NextChunk NextChunkT;
