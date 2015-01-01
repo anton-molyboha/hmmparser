@@ -1,11 +1,11 @@
 This is a simple text parsing library for losely-formalized texts.
 
-The API and the implementation are based on the concept of Hidden Markov Models (HMMs)
-(Note: Though HMMs are widely used in machine learning, this library does not involve the
-"learning" part of the technique. Instead, the parameters of the model are specified
-by the user)
+The API and the implementation are based on the concept of Hidden Markov
+Models (HMMs) (Note: Though HMMs are widely used in machine learning, this
+library does not involve the "learning" part of the technique. Instead,
+the parameters of the model are specified by the user)
 
-You might not need to understand what HHMs are to use the library, though: the true power
-of the library comes from the numerous ways to combine simpler
-descriptions of text "chunks" into more complex ones.
+You might not need to understand what HHMs are to use the library,
+though: the true power of the library comes from the numerous ways to
+combine simpler descriptions of text "chunks" into more complex ones.
 
